@@ -12,8 +12,8 @@ Our project tasks a Thymio II robot - aided by a downward-facing global camera -
 
 The environment features permanent/static obstacles as well as ephemeral ones, requiring a non-trivial navigation strategy working on both a global and local scale:
 
--   The **static obstacles** part of the permanent environment may vary in size, but are always <u>polygonal in shape</u> and <u>easily distinguishable from the ground (and robot) by colour</u>.
--   The **ephemeral obstacles** however, are dynamically placed mid-run, in ways that disrupt the robot's navigation and create a need for local obstacle avoidance. They have <u>no guaranteed shape or colour</u>, but are always <u>around the size of the robot or smaller</u>, and will only be placed <u>in locations that force local avoidance without changing the optimal path to the goal</u> (e.g. not in the middle of narrow "choke points", nor at the apex of sharp turns). _They are expected to be detected by the Thymio's onboard proximity sensors, but not by the global camera._
+-   The **static obstacles** part of the permanent environment may vary in size, but are always <ins>polygonal in shape</ins> and <ins>easily distinguishable from the ground (and robot) by colour</ins>.
+-   The **ephemeral obstacles** however, are dynamically placed mid-run, in ways that disrupt the robot's navigation and create a need for local obstacle avoidance. They have <ins>no guaranteed shape or colour</ins>, but are always <ins>around the size of the robot or smaller</ins>, and will only be placed <ins>in locations that force local avoidance without changing the optimal path to the goal</ins> (e.g. not in the middle of narrow "choke points", nor at the apex of sharp turns). _They are expected to be detected by the Thymio's onboard proximity sensors, but not by the global camera._
 
 ### 1.2 Robot
 
@@ -21,7 +21,7 @@ The **Thymio II** robot is a small differential-drive mobile robot equipped with
 
 ### 1.3 Camera
 
-The global camera, mounted above the environment and looking straight down, is a standard webcam capable of streaming <u>1920x1080, RGB video at 30 FPS</u>. It is connected to a computer and used for global localization of the robot, as well as mapping the static environment + planning paths on it.
+The global camera, mounted above the environment and looking straight down, is a standard webcam capable of streaming <ins>1920x1080, RGB video at 30 FPS</ins>. It is connected to a computer and used for global localization of the robot, as well as mapping the static environment + planning paths on it.
 
 ## 2. Software Setup
 
