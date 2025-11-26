@@ -28,3 +28,10 @@ def euclidean_distance(p1: Point, p2: Point) -> float:
 def angle_between(p1: Point, p2: Point) -> float:
     """Calculate the angle (in radians) of the vector from p1 to p2."""
     return math.atan2(p2.y - p1.y, p2.x - p1.x)
+
+
+# Robot radius in centimeters (approximated, actual Thymio isn't circular)
+ROBOT_RADIUS_CM = 6.0
+
+MAX_CAMERA_WIDTH_PX = 1920
+MAX_CAMERA_HEIGHT_PX = 1080

@@ -23,7 +23,7 @@ def find_path(
     graph: nx.Graph,
     start_node: int,
     goal_node: int,
-    heuristic: HeuristicFunction,
+    heuristic: HeuristicFunction = euclidean_distance,
 ) -> list[int]:
     """
     Finds the shortest path in a NetworkX graph from a start to goal node using the A* algorithm.
@@ -31,7 +31,7 @@ def find_path(
     :param graph: `networkx.Graph` where nodes have attribute `pos: Point` and edges have attribute `weight: float`
     :param start_node: Starting node ID
     :param goal_node: Goal node ID
-    :param heuristic: Function to estimate cost between two nodes, with signature `(Point, Point) -> float`
+    :param heuristic: Function to estimate cost between two nodes, with signature `(Point, Point) -> float` (default: Euclidean distance)
     :return: List of node IDs representing the path from start to goal.
     """
 
@@ -52,9 +52,7 @@ def find_path(
     # 4. Track f_cost (Estimated total cost: g + h)
     # We don't strictly need to store this for all nodes, but it helps debugging
     f_cost: dict[int, float] = {node: float("inf") for node in graph.nodes}
-    f_cost[start_node] = euclidean_distance(
-        graph.nodes[start_node]["pos"], graph.nodes[goal_node]["pos"]
-    )
+    f_cost[start_node] = euclidean_distance(graph.nodes[start_node]["pos"], graph.nodes[goal_node]["pos"])
 
     # Keep track of items in the heap to allow for "Lazy Deletion"
     # (Python's heapq doesn't support updating priorities, so we just add duplicates
