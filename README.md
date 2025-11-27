@@ -1,36 +1,109 @@
 # Global-Local Robot Navigation Through Obstacle-Filled Environments
 
-The final project for EPFL's [**MICRO-452: Basics of Mobile Robotics**](https://edu.epfl.ch/coursebook/en/basics-of-mobile-robotics-MICRO-452) course. The project is intended to address and put into practice (in a basic flavour) key aspects of mobile robotics covered along the course: vision, mapping, state estimation, global and local navigation, and motion control.
+The final project for EPFL's [**MICRO-452: Basics of Mobile Robotics**](https://edu.epfl.ch/coursebook/en/basics-of-mobile-robotics-MICRO-452) course. This project implements a complete navigation stack for a differential drive robot, featuring computer vision, graph-based path planning, sensor fusion (EKF), and reactive control.
 
-![Example environment](example_environment.png)
+**The Concept:** Inspired by the duel on **Mustafar**, the robot must navigate a treacherous environment containing "Lava Pools" (static zones that are fatal to touch but invisible to onboard sensors) and "Falling Rocks" (dynamic obstacles that appear mid-run and must be dodged locally).
+
+![Example environment](images/final_astar_from_packages.png)
 
 ## 1. Physical Setup
 
-Our project tasks a Thymio II robot - aided by a downward-facing global camera - with navigating through an obstacle-filled environment to a marked goal location.
+The project tasks a Thymio II robot with navigating from a start pose to a goal pose while avoiding two distinct types of obstacles.
 
-### 1.1 Environment
+### 1.1 The Environment
 
-The environment features permanent/static obstacles as well as ephemeral ones, requiring a non-trivial navigation strategy working on both a global and local scale:
+The environment presents a dual-layer challenge:
 
--   The **static obstacles** part of the permanent environment may vary in size, but are always <ins>polygonal in shape</ins> and <ins>easily distinguishable from the ground (and robot) by colour</ins>.
--   The **ephemeral obstacles** however, are dynamically placed mid-run, in ways that disrupt the robot's navigation and create a need for local obstacle avoidance. They have <ins>no guaranteed shape or colour</ins>, but are always <ins>around the size of the robot or smaller</ins>, and will only be placed <ins>in locations that force local avoidance without changing the optimal path to the goal</ins> (e.g. not in the middle of narrow "choke points", nor at the apex of sharp turns). _They are expected to be detected by the Thymio's onboard proximity sensors, but not by the global camera._
+1.  **Static "Global" Obstacles (The Lava):**
+    -   **Physicality:** Flat, colored polygonal cutouts.
+    -   **Visibility:** _Invisible_ to the robot's onboard horizontal proximity sensors, but clearly visible to the overhead global camera.
+    -   **Constraint:** The robot cannot drive over them. Avoiding them relies entirely on accurate global localization and path planning.
+2.  **Ephemeral "Local" Obstacles (The Rocks):**
+    -   **Physicality:** 3D physical objects (cylinders, blocks) roughly the size of the robot.
+    -   **Visibility:** Visible to the robot's onboard sensors, but _ignored_ by the global camera mapping (or placed after mapping is complete).
+    -   **Constraint:** These act as dynamic blockers. The robot must use local sensing to reactively avoid them without losing track of its global objective.
 
-### 1.2 Robot
+### 1.2 The Robot
 
-The **Thymio II** robot is a small differential-drive mobile robot equipped with a variety of onboard sensors, including proximity sensors along the curved front, the back, and underneath. It is programmed to follow navigation commands received from, and send sensor data to, an external computer - either wirelessly or by USB. In our project, we interface with the the robot via its Python API.
+The **Thymio II** is a differential-drive mobile robot.
 
-### 1.3 Camera
+-   **Sensors:** 5 front-facing and 2 rear-facing horizontal IR proximity sensors (for local avoidance).
+-   **Comms:** Python API interfacing via USB/RF dongle.
+-   **Markers:** An ArUco marker is mounted on top of the robot to facilitate high-precision global tracking (Pose: $x, y, \theta$) via the overhead camera.
 
-The global camera, mounted above the environment and looking straight down, is a standard webcam capable of streaming <ins>1920x1080, RGB video at 30 FPS</ins>. It is connected to a computer and used for global localization of the robot, as well as mapping the static environment + planning paths on it.
+### 1.3 The Camera
 
-## 2. Software Setup
+A standard webcam ($1920 \times 1080$, RGB, 30 FPS) is mounted overhead. It serves as the "GPS" of the system, responsible for:
 
-All written in python3.
+1.  **Initial Mapping:** Detecting static obstacle polygons and the goal area.
+2.  **Live Tracking:** Providing absolute position estimates to correct the robot's drifting odometry.
 
-Key parts of the implementation:
+---
 
-1. **Mapping:** construction of a visibility graph of the static environment via feature detection on camera images
-2. **Path planning:** global path planning via A\* on the visibility graph
-3. **Localization:** global localization of the robot via camera tracking of visual markers on the robot body
-4. **State estimation:** EKF fusing camera-based global localization and Thymio odometry
-5. **Local navigation:** following waypoints of the global path while avoiding ephemeral obstacles detected by Thymio proximity sensors
+## 2. Software Architecture
+
+The system is built on a standard robotic control loop consisting of Perception, Estimation, Planning, and Control.
+
+### 2.1 Vision (`vision.py`)
+
+-   **Encapsulation:** Handles all OpenCV logic, camera calibration, and perspective warping.
+-   **Mapping (One-Shot):** Runs at startup. Segments static obstacles ("Lava"), dilates them by the robot's radius + safety margin, and constructs a **Visibility Graph** using Shapely.
+-   **Localization (Loop):** Runs continuously. Detects the ArUco marker to provide global $(x, y, \theta)$ measurements.
+
+### 2.2 Global Path Planning (`pathfinding.py`)
+
+-   **Algorithm:** **A\* Search** on the Visibility Graph.
+-   **Why A\*?** Since this is a point-to-point query on a weighted graph (Euclidean distance), A\* is more efficient than Dijkstra as it directs the search toward the goal using a heuristic.
+-   **Output:** A list of coordinate waypoints $[W_1, W_2, ... W_{goal}]$ representing the optimal path through the "safe" zones.
+
+### 2.3 State Estimation (`state_estimation.py`)
+
+-   **Problem:** Wheel odometry drifts over time; Vision is accurate but has latency and noise.
+-   **Solution:** An **Extended Kalman Filter (EKF)** fuses these two inputs.
+    -   _Prediction:_ High-frequency updates based on motor commands (Odometry model).
+    -   _Update:_ Lower-frequency corrections based on global camera measurements.
+
+### 2.4 Motion Control (`motion_control.py`)
+
+The robot operates on a **Switching Finite State Machine (FSM)**. We avoid "stacking" behaviors (adding vectors) to prevent the robot from freezing when goals and obstacles cancel each other out.
+
+#### State A: `NAVIGATING` (The Manager)
+
+-   **Trigger:** Path is clear (IR sensors < threshold).
+-   **Logic:** A **P-Controller with Speed Regulation**.
+    -   _Note:_ We intentionally omit I and D terms. The Derivative term amplifies visual noise (jitter), and the Integral term risks windup during long turns. A tuned P-controller provides the smoothest trajectory for this specific hardware.
+    -   _Mechanism:_ The robot turns proportional to the heading error, and slows its forward speed as the turning angle increases (organic turning).
+
+#### State B: `AVOIDING` (The Worker)
+
+-   **Trigger:** IR sensors detect an object ("Rock") in the immediate path.
+-   **Logic:** **Braitenberg / Reactive Control**.
+    -   The robot essentially "fears" the object, turning away from the sensor with the highest reading while maintaining forward momentum.
+    -   Once the sensors are clear, the FSM switches back to `NAVIGATING`, and the robot aims for its current waypoint again.
+
+---
+
+## 3. Code Structure
+
+The project is organized to separate concerns and minimize circular dependencies:
+
+```text
+src
+├── main.ipynb              # Orchestrator: Initializes modules and runs the main control loop.
+├── utils.py                # Shared definitions: Point & Pose types (named tuples), geometry helpers, etc.
+├── vision.py               # Hardware abstraction for Camera, Map Construction, and ArUco tracking.
+├── pathfinding.py          # Pure algorithmic implementation of A*.
+├── state_estimation.py     # EKF implementation for sensor fusion.
+└── motion_control.py       # Robot behavior/control logic (FSM, P-Controller, Avoidance).
+```
+
+---
+
+## 4. Assumptions & Constraints
+
+To ensure feasible implementation within the scope of the course:
+
+1.  **Obstacle Separation:** Local obstacles ("Rocks") will not be placed in locations that force the robot into Global obstacles ("Lava").
+2.  **Corner Safety:** Local obstacles will not be placed immediately before a sharp blind corner, ensuring the robot doesn't evade a rock only to turn blindly into a lava pool.
+3.  **Path Validity:** Local obstacles will block the direct path but will allow for a local bypass; they will not completely seal off a route (which would require global re-planning).
+4.  **Flat World:** The ground is perfectly flat; the overhead camera perspective matrix is constant.
