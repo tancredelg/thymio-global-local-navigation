@@ -44,37 +44,37 @@ A standard webcam ($1920 \times 1080$, RGB, 30 FPS) is mounted overhead. It serv
 
 The system is built on a standard robotic control loop consisting of Perception, Estimation, Planning, and Control.
 
-### 2.1 Vision (`vision.py`)
+### 2.1 Vision ([`vision.py`](src/vision.py))
 
 -   **Encapsulation:** Handles all OpenCV logic, camera calibration, and perspective warping.
 -   **Mapping (One-Shot):** Runs at startup. Segments static obstacles ("Lava"), dilates them by the robot's radius + safety margin, and constructs a **Visibility Graph** using Shapely.
 -   **Localization (Loop):** Runs continuously. Detects the ArUco marker to provide global $(x, y, \theta)$ measurements.
 
-### 2.2 Global Path Planning (`pathfinding.py`)
+### 2.2 Global Path Planning ([`pathfinding.py`](src/pathfinding.py))
 
 -   **Algorithm:** **A\* Search** on the Visibility Graph.
 -   **Why A\*?** Since this is a point-to-point query on a weighted graph (Euclidean distance), A\* is more efficient than Dijkstra as it directs the search toward the goal using a heuristic.
 -   **Output:** A list of coordinate waypoints $[W_1, W_2, ... W_{goal}]$ representing the optimal path through the "safe" zones.
 
-### 2.3 State Estimation (`state_estimation.py`)
+### 2.3 State Estimation ([`state_estimation.py`](src/state_estimation.py))
 
 -   **Problem:** Wheel odometry drifts over time; Vision is accurate but has latency and noise.
 -   **Solution:** An **Extended Kalman Filter (EKF)** fuses these two inputs.
     -   _Prediction:_ High-frequency updates based on motor commands (Odometry model).
     -   _Update:_ Lower-frequency corrections based on global camera measurements.
 
-### 2.4 Motion Control (`motion_control.py`)
+### 2.4 Motion Control ([`control.py`](src/control.py))
 
 The robot operates on a **Switching Finite State Machine (FSM)**. We avoid "stacking" behaviors (adding vectors) to prevent the robot from freezing when goals and obstacles cancel each other out.
 
-#### State A: `NAVIGATING` (The Manager)
+#### State A: `NAVIGATING`
 
 -   **Trigger:** Path is clear (IR sensors < threshold).
 -   **Logic:** A **P-Controller with Speed Regulation**.
     -   _Note:_ We intentionally omit I and D terms. The Derivative term amplifies visual noise (jitter), and the Integral term risks windup during long turns. A tuned P-controller provides the smoothest trajectory for this specific hardware.
     -   _Mechanism:_ The robot turns proportional to the heading error, and slows its forward speed as the turning angle increases (organic turning).
 
-#### State B: `AVOIDING` (The Worker)
+#### State B: `AVOIDING`
 
 -   **Trigger:** IR sensors detect an object ("Rock") in the immediate path.
 -   **Logic:** **Braitenberg / Reactive Control**.
@@ -90,11 +90,11 @@ The project is organized to separate concerns and minimize circular dependencies
 ```text
 src
 ├── main.ipynb              # Orchestrator: Initializes modules and runs the main control loop.
-├── utils.py                # Shared definitions: Point & Pose types (named tuples), geometry helpers, etc.
+├── utils.py                # Shared definitions: Point & Pose named tuples, geometry helpers, etc.
 ├── vision.py               # Hardware abstraction for Camera, Map Construction, and ArUco tracking.
 ├── pathfinding.py          # Pure algorithmic implementation of A*.
 ├── state_estimation.py     # EKF implementation for sensor fusion.
-└── motion_control.py       # Robot behavior/control logic (FSM, P-Controller, Avoidance).
+└── control.py              # Robot behavior/control logic (FSM, P-Controller, Avoidance).
 ```
 
 ---
