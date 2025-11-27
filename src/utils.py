@@ -25,9 +25,14 @@ def euclidean_distance(p1: Point, p2: Point) -> float:
     return math.dist(p1, p2)  # (math.dist == Euclidean distance)
 
 
-def angle_between(p1: Point, p2: Point) -> float:
+def angle_between(p1: Point | Pose, p2: Point | Pose) -> float:
     """Calculate the angle (in radians) of the vector from p1 to p2."""
     return math.atan2(p2.y - p1.y, p2.x - p1.x)
+
+
+def normalize_angle(angle: float) -> float:
+    """Normalize an angle to the range [-pi, pi]."""
+    return (angle + math.pi) % (2 * math.pi) - math.pi
 
 
 # Robot radius in centimeters (approximated, actual Thymio isn't circular)
