@@ -26,7 +26,7 @@ class VisionSystem:
         :param map_size_cm: Size of the map in centimeters (width, height)
         """
 
-        assert map_size_cm[0] > 0 and map_size_cm[1] > 0, "Map size must be positive non-zero values."
+        assert map_size_cm[0] > 0 and map_size_cm[1] > 0, "Map size must be positive non-zero values"
 
         self.map_width = map_size_cm[0]
         """Width of the real-world map in cm"""

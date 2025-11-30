@@ -53,7 +53,7 @@ class ThymioController:
         """
 
         # Calculate heading error
-        angle_to_target = angle_between(current_pose, target_pos) # Convert to degrees
+        angle_to_target = angle_between(current_pose, target_pos)
         heading_error = normalize_angle(angle_to_target - current_pose.theta)
 
         # Calculate (P-controlled) angular and (regulated) linear speeds
