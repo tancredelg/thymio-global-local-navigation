@@ -13,7 +13,7 @@ class ThymioController:
     def __init__(self):
         # Tuning Constants
         self.KP_ROT = 2.0  # P-gain for rotation
-        self.MAX_SPEED = 100.0  # Thymio units
+        self.MAX_SPEED = 1000.0  # Thymio units
         self.AVOID_SPEED = 60.0
         self.SENSOR_THRESHOLD = 2000  # Threshold to trigger avoidance
 
@@ -53,7 +53,7 @@ class ThymioController:
         """
 
         # Calculate heading error
-        angle_to_target = angle_between(current_pose, target_pos)
+        angle_to_target = angle_between(current_pose, target_pos) # Convert to degrees
         heading_error = normalize_angle(angle_to_target - current_pose.theta)
 
         # Calculate (P-controlled) angular and (regulated) linear speeds
@@ -84,7 +84,7 @@ class ThymioController:
 
         # Calculate a "turning force" based on sensor difference
         # Positive = Turn Right, Negative = Turn Left
-        turn_force = (sensor_data[0] + sensor_data[1]) - (sensor_data[3] + sensor_data[4])
+        turn_force = (sensor_data[0] + sensor_data[1]//2) - (sensor_data[3]//2 + sensor_data[4])
 
         # Base speed for avoidance
         base = self.AVOID_SPEED

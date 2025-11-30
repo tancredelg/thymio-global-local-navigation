@@ -215,9 +215,9 @@ class VisionSystem:
     def capture_frame(self) -> Optional[np.ndarray]:
         """Captures a single frame from the camera and converts it to RGB."""
 
-        if not self.cap.isOpened():
-            return None
+        print("Capturing frame from camera...")
         ret, frame = self.cap.read()
+        print(f"Frame captured: {ret}, shape: {frame.shape if ret else 'N/A'}")
         if not ret:
             return None
         return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -253,10 +253,10 @@ class VisionSystem:
             
             
             #compute the angle (top left-top right perpendicular )
-            vector = pts[1] - pts[0]
-            print(vector)                
-            angle = np.degrees(np.arctan2(vector[1], vector[0]))
-            theta = (angle + 360) % 360
+            vector = pts[1] - pts[0]                
+            angle = np.arctan2(vector[1], vector[0])
+            theta = (angle + 2*np.pi) % (2 * np.pi)
+            
             
             x_cm = cx / self.pxl_per_cm_x
             y_cm = cy / self.pxl_per_cm_y
