@@ -1,5 +1,4 @@
 import numpy as np
-import matplotlib.pyplot as plt 
 import math 
 
 
@@ -7,20 +6,28 @@ class Thymio:
     def __init__(self): 
         self.L = 9.5        # axle length (cm)
         self.R = 2.2        # wheel radius (cm)
-        self.freq = 100     # Hz
+        self.freq = 10     # Hz
         self.v_l = 0.0      # cm/s
         self.v_r = 0.0      # cm/s
 
         self.dt = 1.0 / self.freq
 
+        self.c = 0.43478 / 10.0 # Thymio Units to cm/s 
+        
         # Covariances of the model (Q_model) 
-        self.sigma_x_model = 0.01        #std in x (cm)
-        self.sigma_y_model = 0.01        #std in y (cm)
-        self.sigma_theta_model = 0.001   #std in theta (rad)
+        self.sigma_x_model = 0.03        #std in x (cm)
+        self.sigma_y_model = 0.03       #std in y (cm)
+        self.sigma_theta_model = 0.005  #std in theta (rad)
 
-        # Input Wheel Speed Covariances 
-        self.sigma_vl = 0.01              # std in v_l 
-        self.sigma_vr = 0.01              # std in v_r 
+        ''' Probably will need some changes to address a better argumentation (if they work)'''
+        # Input Wheel Speed Covariances thymio unit wise
+        self.var_vl_base = 1.59             # variance in v_l 
+        self.var_vr_base = 1.13             # variance in v_r 
+
+        # Obtained through experimentation and data analysis of variances in thymio unit wise
+        self.kvl = 0.47
+        self.kvr = 0.51 
+        ''''''
 
 
     def wrap_angle(self, angle): 
@@ -67,7 +74,22 @@ class Thymio:
     def compute_Q(self, x):
         G = self.jacobian_G(x)
 
-        sigma_u = np.diag([self.sigma_vl**2, self.sigma_vr**2])
+        # Obtained through experimentation and data analysis of variances 
+        # kvl = 0.47 
+        # kvr = 0.51 
+        u_l = self.v_l / self.c 
+        u_r = self.v_r / self.c 
+
+        var_u_l = (self.c**2) * max(self.kvl * abs(u_l) + self.var_vl_base, self.var_vl_base) 
+        var_u_r = (self.c**2) * max(self.kvr * abs(u_r) + self.var_vr_base, self.var_vr_base)
+
+        
+        # sigma_vl = max(self.kvl * abs(self.v_l) + self.sigma_vl_base,
+        #                self.sigma_vl_base)
+        # sigma_vr = max(self.kvr * abs(self.v_r) + self.sigma_vr_base,
+        #                self.sigma_vr_base)
+
+        sigma_u = np.diag([var_u_l, var_u_r]) 
 
         Q_process = np.diag([self.sigma_x_model**2,
                              self.sigma_y_model**2,
