@@ -6,14 +6,16 @@ import itertools
 import math
 from typing import Tuple, List, Optional
 from utils import Point, Pose, ROBOT_RADIUS_CM
+import time
+import matplotlib.pyplot as plt
 
 
 class VisionSystem:
     def __init__(
         self,
-        camera_index: int = 0,
+        camera_index: int = 1,
         camera_resolution: Tuple[int, int] = (1920, 1080),
-        map_size_cm: Tuple[float, float] = (0, 0),
+        map_size_cm: Tuple[float, float] = (112, 82),
     ):
         """
         Initializes the Vision System.
@@ -32,24 +34,31 @@ class VisionSystem:
         """Height of the real-world map in cm"""
 
         # Init capture device and set resolution
-        self.cap = cv2.VideoCapture(camera_index)
-        if not self.cap.isOpened():
-            raise RuntimeError(f"Could not open camera {camera_index}")
-
+        self.cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+        #if not self.cap.isOpened():
+        #   raise RuntimeError(f"Could not open camera {camera_index}")
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_resolution[0])
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_resolution[1])
-
+        
+        self.warmup_camera()
+        
+        
         # Capture a frame for calibration
         ret, frame = self.cap.read()
         if not ret:
             raise RuntimeError("Could not capture frame for calibration")
-
+        self.img = frame
         # Convert to RGB for processing
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
+        
         # Detect markers
-        self.src_points = self._detect_calibration_markers(frame_rgb)
-
+        aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+        detector = cv2.aruco.ArucoDetector(aruco_dict)
+        corners, ids, rejected = detector.detectMarkers(frame)
+        
+        self.src_points = self._detect_calibration_aruco(frame, corners, ids)
+        #self.src_points = self._detect_calibration_markers(frame_rgb)
+        
         self.map_width_pxl = int(self.src_points[1][0] - self.src_points[0][0])  # = TR.x - TL.x
         """Width of the real-world map in pixels (as seen by camera)"""
         self.map_height_pxl = int(self.src_points[2][1] - self.src_points[0][1])  # = BL.y - TL.y
@@ -115,7 +124,45 @@ class VisionSystem:
         self.aruco_params = cv2.aruco.DetectorParameters()
         # Use ArucoDetector if available (OpenCV 4.7+), otherwise fallback might be needed but we assume 4.7+
         self.aruco_detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
+    
 
+    def warmup_camera(self, duration=5):
+        print(f"Warming up camera for {duration} seconds...")
+        start_time = time.time()
+        
+        while int(time.time() - start_time) < duration:
+            ret, frame = self.cap.read()
+            if not ret:
+                print("Error reading frame during warmup.")
+                break
+                
+            # Optional: Add visual countdown to the video feed
+            remaining = duration - int(time.time() - start_time)
+           
+
+            
+        print("Warmup complete. Camera is ready.")
+
+        
+    def _detect_calibration_aruco (self, img, corners, ids) -> np.ndarray:
+        corners_centers = []
+        for i, c in enumerate(corners):
+            marker_id = ids[i][0]  # get scalar I
+            if marker_id != 1:
+                pts = c[0]
+                cx = pts[:, 0].mean()
+                cy = pts[:, 1].mean()
+                corners_centers.append([marker_id, [cx, cy]])  # (id, [x, y])
+
+        # Sort by ID
+        corners_centers.sort(key=lambda x: x[0])
+        corners_centers = np.array([item[1] for item in corners_centers])
+        #cv2.imwrite("imgg.jpg", img)  
+                
+        if len(corners_centers) != 4:
+            raise RuntimeError(f"Calibration failed: Expected 4 markers, found {len(corners_centers)}")
+        return corners_centers
+    
     def _detect_calibration_markers(self, img: np.ndarray) -> np.ndarray:
         """
         Detects the 4 green calibration markers in the `img` corners.
@@ -123,13 +170,12 @@ class VisionSystem:
         :returns: sorted list of the 4 corner points: [TL, TR, BL, BR]
         """
         hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
-
+ 
         # Green color range (adjust if needed)
-        lower_green = np.array([35, 50, 50])
-        upper_green = np.array([90, 255, 255])
+        lower_green = np.array([50, 50, 50])
+        upper_green = np.array([100, 100, 120])
 
         mask = cv2.inRange(hsv, lower_green, upper_green)
-
         # Clean up mask
         kernel = np.ones((3, 3), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
@@ -164,7 +210,6 @@ class VisionSystem:
 
         # 3. Sort Bottom by X to get BL, BR
         bottom = bottom[np.argsort(bottom[:, 0])]
-
         return np.array([top[0], top[1], bottom[0], bottom[1]], dtype=np.float32)
 
     def capture_frame(self) -> Optional[np.ndarray]:
@@ -201,24 +246,37 @@ class VisionSystem:
 
         if ids is not None and len(ids) > 0:
             # Assume the first marker found is the robot
-            c = corners[0][0]  # Shape (4, 2)
-
+            pts = corners[0][0]  # Shape (4, 2)
+        ###
+            cx = int((pts[:,0].sum()) / 4)
+            cy = int((pts[:,1].sum()) / 4)
+            
+            
+            #compute the angle (top left-top right perpendicular )
+            vector = pts[1] - pts[0]
+            print(vector)                
+            angle = np.degrees(np.arctan2(vector[1], vector[0]))
+            theta = (angle + 360) % 360
+            
+            x_cm = cx / self.pxl_per_cm_x
+            y_cm = cy / self.pxl_per_cm_y
+        ###
             # Center
-            center_x = np.mean(c[:, 0])
-            center_y = np.mean(c[:, 1])
+            #center_x = np.mean(c[:, 0])
+            #center_y = np.mean(c[:, 1])
 
             # Orientation (Midpoint of top edge - corners 0 and 1)
             # ArUco corners are: 0=TL, 1=TR, 2=BR, 3=BL (clockwise from top-left)
             # Vector from center to front (between 0 and 1)
-            front_x = (c[0][0] + c[1][0]) / 2.0
-            front_y = (c[0][1] + c[1][1]) / 2.0
+            #front_x = (c[0][0] + c[1][0]) / 2.0
+            #front_y = (c[0][1] + c[1][1]) / 2.0
 
             # Angle in image coordinates (y-down)
-            theta = math.atan2(front_y - center_y, front_x - center_x)
+            #theta = math.atan2(front_y - center_y, front_x - center_x)
 
             # Convert pixels to cm
-            x_cm = center_x / self.pxl_per_cm_x
-            y_cm = center_y / self.pxl_per_cm_y
+            #x_cm = center_x / self.pxl_per_cm_x
+            #y_cm = center_y / self.pxl_per_cm_y
 
             return Pose(x_cm, y_cm, theta)
 
@@ -241,28 +299,45 @@ class VisionSystem:
             raise RuntimeError("Could not capture image from camera")
 
         warped = self.warp_image(img)
-        hsv = cv2.cvtColor(warped, cv2.COLOR_RGB2HSV)
+        cv2.imwrite("PPPPP.jpg", warped)
+        hsv = cv2.cvtColor(warped, cv2.COLOR_BGR2HSV)
         hsv = cv2.GaussianBlur(hsv, (7, 7), 0)
-
         # 1. Segment Obstacles
-        obstacle_lower = np.array([10, 70, 180])
-        obstacle_upper = np.array([25, 255, 255])
-        obstacle_mask = cv2.inRange(hsv, obstacle_lower, obstacle_upper)
+        #obstacle_lower = np.array([10, 70, 180])
+        #obstacle_upper = np.array([25, 255, 255])
+        #obstacle_mask = cv2.inRange(hsv, obstacle_lower, obstacle_upper)
 
+        obstacle_lower1 = np.array([0, 120, 70])
+        obstacle_upper1 = np.array([10, 255, 255])
+
+        # Upper red (wrap-around)
+        obstacle_lower2 = np.array([165, 120, 70])
+        obstacle_upper2 = np.array([179, 255, 255])
+        obstacle_mask1 = cv2.inRange(hsv, obstacle_lower1, obstacle_upper1)
+        obstacle_mask2 = cv2.inRange(hsv, obstacle_lower2, obstacle_upper2)
+
+        obstacle_mask = cv2.bitwise_or(obstacle_mask1, obstacle_mask2)
+        
         kernel = np.ones((5, 5), np.uint8)
         obstacle_mask = cv2.morphologyEx(obstacle_mask, cv2.MORPH_OPEN, kernel)
         obstacle_mask = cv2.morphologyEx(obstacle_mask, cv2.MORPH_CLOSE, kernel)
 
+        cv2.imwrite("obstacle_mask.jpg", obstacle_mask)  
+        cv2.imwrite("obstacle_mask1.jpg", obstacle_mask1)
+        cv2.imwrite("obstacle_mask2.jpg", obstacle_mask2)
         # 2. Segment Target (Goal)
-        target_lower = np.array([150, 125, 175])
-        target_upper = np.array([179, 255, 255])
-        target_mask = cv2.inRange(hsv, target_lower, target_upper)
+
+
+        lower_green = np.array([35, 60, 70])
+        upper_green = np.array([85, 255,240]) 
+        #white_mask = cv2.inRange(hsv, lower_red2, upper_green)
+        target_mask = cv2.inRange(hsv, lower_green, upper_green)
         target_mask = cv2.morphologyEx(target_mask, cv2.MORPH_OPEN, kernel)
         target_mask = cv2.morphologyEx(target_mask, cv2.MORPH_CLOSE, kernel)
-
+        cv2.imwrite("RRRRR.jpg", target_mask)
         target_indices = np.argwhere(target_mask > 0)
         if len(target_indices) == 0:
-            raise RuntimeError("Target not detected")
+           raise RuntimeError("Target not detected")
         target_pos_px = np.mean(target_indices, axis=0)[::-1]  # (y, x) -> (x, y)
         goal_pos_cm = Point(target_pos_px[0] / self.pxl_per_cm_x, target_pos_px[1] / self.pxl_per_cm_y)
 
@@ -272,7 +347,6 @@ class VisionSystem:
         # Re-implementing ArUco detection on *this* frame to avoid movement issues
         gray = cv2.cvtColor(warped, cv2.COLOR_RGB2GRAY)
         corners, ids, _ = self.aruco_detector.detectMarkers(gray)
-
         start_pos_cm: Optional[Point] = None
 
         if ids is not None and len(ids) > 0:
@@ -280,6 +354,7 @@ class VisionSystem:
             center_x = np.mean(c[:, 0])
             center_y = np.mean(c[:, 1])
             start_pos_cm = Point(center_x / self.pxl_per_cm_x, center_y / self.pxl_per_cm_y)
+            print(start_pos_cm)
         else:
             # Fallback to color segmentation if ArUco fails
             robot_lower = np.array([0, 0, 220])
@@ -325,7 +400,7 @@ class VisionSystem:
         # In _construct_visibility_graph, we append start then goal to nodes
         start_node_id = G.number_of_nodes() - 2
         goal_node_id = G.number_of_nodes() - 1
-
+        
         return G, start_node_id, goal_node_id
 
     def _merge_close_vertices(self, pts: np.ndarray, min_dist: float = 5.0) -> np.ndarray:
