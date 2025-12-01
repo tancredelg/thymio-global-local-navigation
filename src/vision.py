@@ -35,14 +35,16 @@ class VisionSystem:
 
         # Init capture device and set resolution
         self.cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
-        #if not self.cap.isOpened():
-        #   raise RuntimeError(f"Could not open camera {camera_index}")
+        if not self.cap.isOpened():
+            raise RuntimeError(
+                f"Could not open camera {camera_index}. Is it connected? Is another app using it?"
+            )
+
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_resolution[0])
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_resolution[1])
-        
+
         self.warmup_camera()
-        
-        
+
         # Capture a frame for calibration
         ret, frame = self.cap.read()
         if not ret:
@@ -50,15 +52,17 @@ class VisionSystem:
         self.img = frame
         # Convert to RGB for processing
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
+
+        cv2.imwrite("warmup_frame.jpg", frame_rgb)
+
         # Detect markers
         aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
         detector = cv2.aruco.ArucoDetector(aruco_dict)
         corners, ids, rejected = detector.detectMarkers(frame)
-        
+
         self.src_points = self._detect_calibration_aruco(frame, corners, ids)
-        #self.src_points = self._detect_calibration_markers(frame_rgb)
-        
+        # self.src_points = self._detect_calibration_markers(frame_rgb)
+
         self.map_width_pxl = int(self.src_points[1][0] - self.src_points[0][0])  # = TR.x - TL.x
         """Width of the real-world map in pixels (as seen by camera)"""
         self.map_height_pxl = int(self.src_points[2][1] - self.src_points[0][1])  # = BL.y - TL.y
@@ -85,6 +89,15 @@ class VisionSystem:
         self.aruco_params = cv2.aruco.DetectorParameters()
         # Use ArucoDetector if available (OpenCV 4.7+), otherwise fallback might be needed but we assume 4.7+
         self.aruco_detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
+
+    def release(self):
+        """Releases the camera resource."""
+        if hasattr(self, "cap") and self.cap.isOpened():
+            self.cap.release()
+            print("Camera released.")
+
+    def __del__(self):
+        self.release()
 
     def init_from_img(self, img: np.ndarray):
         """
@@ -124,27 +137,23 @@ class VisionSystem:
         self.aruco_params = cv2.aruco.DetectorParameters()
         # Use ArucoDetector if available (OpenCV 4.7+), otherwise fallback might be needed but we assume 4.7+
         self.aruco_detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
-    
 
     def warmup_camera(self, duration=5):
         print(f"Warming up camera for {duration} seconds...")
         start_time = time.time()
-        
+
         while int(time.time() - start_time) < duration:
             ret, frame = self.cap.read()
             if not ret:
                 print("Error reading frame during warmup.")
                 break
-                
+
             # Optional: Add visual countdown to the video feed
             remaining = duration - int(time.time() - start_time)
-           
 
-            
-        print("Warmup complete. Camera is ready.")
+        print("Warmup complete. Camera is ready.")
 
-        
-    def _detect_calibration_aruco (self, img, corners, ids) -> np.ndarray:
+    def _detect_calibration_aruco(self, img, corners, ids) -> np.ndarray:
         corners_centers = []
         for i, c in enumerate(corners):
             marker_id = ids[i][0]  # get scalar I
@@ -157,12 +166,11 @@ class VisionSystem:
         # Sort by ID
         corners_centers.sort(key=lambda x: x[0])
         corners_centers = np.array([item[1] for item in corners_centers])
-        #cv2.imwrite("imgg.jpg", img)  
-                
+
         if len(corners_centers) != 4:
             raise RuntimeError(f"Calibration failed: Expected 4 markers, found {len(corners_centers)}")
         return corners_centers
-    
+
     def _detect_calibration_markers(self, img: np.ndarray) -> np.ndarray:
         """
         Detects the 4 green calibration markers in the `img` corners.
@@ -170,7 +178,7 @@ class VisionSystem:
         :returns: sorted list of the 4 corner points: [TL, TR, BL, BR]
         """
         hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
- 
+
         # Green color range (adjust if needed)
         lower_green = np.array([50, 50, 50])
         upper_green = np.array([100, 100, 120])
@@ -215,7 +223,7 @@ class VisionSystem:
     def capture_frame(self) -> Optional[np.ndarray]:
         """Captures a single frame from the camera and converts it to RGB."""
 
-        print("Capturing frame from camera...")
+        # print("Capturing frame from camera...")
         ret, frame = self.cap.read()
         print(f"Frame captured: {ret}, shape: {frame.shape if ret else 'N/A'}")
         if not ret:
@@ -247,36 +255,22 @@ class VisionSystem:
         if ids is not None and len(ids) > 0:
             # Assume the first marker found is the robot
             pts = corners[0][0]  # Shape (4, 2)
-        ###
-            cx = int((pts[:,0].sum()) / 4)
-            cy = int((pts[:,1].sum()) / 4)
-            
-            
-            #compute the angle (top left-top right perpendicular )
-            vector = pts[1] - pts[0]                
+
+            # Compute the angle (top left-top right perpendicular )
+            vector = pts[1] - pts[0]
             angle = np.arctan2(vector[1], vector[0])
-            theta = (angle + 2*np.pi) % (2 * np.pi)
-            
-            
+            theta = (angle + 2 * np.pi) % (2 * np.pi)
+
+            # Compute center
+            cx = np.mean(pts[:, 0])
+            cy = np.mean(pts[:, 1])
+
+            # Convert to world coordinates (y-up) -> Negate angle
+            theta = -theta
+
+            # Convert pixels to cm (and flip y-axis to be y-up)
             x_cm = cx / self.pxl_per_cm_x
-            y_cm = cy / self.pxl_per_cm_y
-        ###
-            # Center
-            #center_x = np.mean(c[:, 0])
-            #center_y = np.mean(c[:, 1])
-
-            # Orientation (Midpoint of top edge - corners 0 and 1)
-            # ArUco corners are: 0=TL, 1=TR, 2=BR, 3=BL (clockwise from top-left)
-            # Vector from center to front (between 0 and 1)
-            #front_x = (c[0][0] + c[1][0]) / 2.0
-            #front_y = (c[0][1] + c[1][1]) / 2.0
-
-            # Angle in image coordinates (y-down)
-            #theta = math.atan2(front_y - center_y, front_x - center_x)
-
-            # Convert pixels to cm
-            #x_cm = center_x / self.pxl_per_cm_x
-            #y_cm = center_y / self.pxl_per_cm_y
+            y_cm = self.map_height - (cy / self.pxl_per_cm_y)
 
             return Pose(x_cm, y_cm, theta)
 
@@ -303,9 +297,9 @@ class VisionSystem:
         hsv = cv2.cvtColor(warped, cv2.COLOR_BGR2HSV)
         hsv = cv2.GaussianBlur(hsv, (7, 7), 0)
         # 1. Segment Obstacles
-        #obstacle_lower = np.array([10, 70, 180])
-        #obstacle_upper = np.array([25, 255, 255])
-        #obstacle_mask = cv2.inRange(hsv, obstacle_lower, obstacle_upper)
+        # obstacle_lower = np.array([10, 70, 180])
+        # obstacle_upper = np.array([25, 255, 255])
+        # obstacle_mask = cv2.inRange(hsv, obstacle_lower, obstacle_upper)
 
         obstacle_lower1 = np.array([0, 120, 70])
         obstacle_upper1 = np.array([10, 255, 255])
@@ -317,29 +311,30 @@ class VisionSystem:
         obstacle_mask2 = cv2.inRange(hsv, obstacle_lower2, obstacle_upper2)
 
         obstacle_mask = cv2.bitwise_or(obstacle_mask1, obstacle_mask2)
-        
+
         kernel = np.ones((5, 5), np.uint8)
         obstacle_mask = cv2.morphologyEx(obstacle_mask, cv2.MORPH_OPEN, kernel)
         obstacle_mask = cv2.morphologyEx(obstacle_mask, cv2.MORPH_CLOSE, kernel)
 
-        cv2.imwrite("obstacle_mask.jpg", obstacle_mask)  
+        cv2.imwrite("obstacle_mask.jpg", obstacle_mask)
         cv2.imwrite("obstacle_mask1.jpg", obstacle_mask1)
         cv2.imwrite("obstacle_mask2.jpg", obstacle_mask2)
         # 2. Segment Target (Goal)
 
-
         lower_green = np.array([35, 60, 70])
-        upper_green = np.array([85, 255,240]) 
-        #white_mask = cv2.inRange(hsv, lower_red2, upper_green)
+        upper_green = np.array([85, 255, 240])
+        # white_mask = cv2.inRange(hsv, lower_red2, upper_green)
         target_mask = cv2.inRange(hsv, lower_green, upper_green)
         target_mask = cv2.morphologyEx(target_mask, cv2.MORPH_OPEN, kernel)
         target_mask = cv2.morphologyEx(target_mask, cv2.MORPH_CLOSE, kernel)
         cv2.imwrite("RRRRR.jpg", target_mask)
         target_indices = np.argwhere(target_mask > 0)
         if len(target_indices) == 0:
-           raise RuntimeError("Target not detected")
+            raise RuntimeError("Target not detected")
         target_pos_px = np.mean(target_indices, axis=0)[::-1]  # (y, x) -> (x, y)
-        goal_pos_cm = Point(target_pos_px[0] / self.pxl_per_cm_x, target_pos_px[1] / self.pxl_per_cm_y)
+        goal_pos_cm = Point(
+            target_pos_px[0] / self.pxl_per_cm_x, self.map_height - (target_pos_px[1] / self.pxl_per_cm_y)
+        )
 
         # 3. Get Robot Pose (Start)
         # Try ArUco first by calling our own method (but we need to reuse the image ideally,
@@ -353,7 +348,9 @@ class VisionSystem:
             c = corners[0][0]
             center_x = np.mean(c[:, 0])
             center_y = np.mean(c[:, 1])
-            start_pos_cm = Point(center_x / self.pxl_per_cm_x, center_y / self.pxl_per_cm_y)
+            start_pos_cm = Point(
+                center_x / self.pxl_per_cm_x, self.map_height - (center_y / self.pxl_per_cm_y)
+            )
             print(start_pos_cm)
         else:
             # Fallback to color segmentation if ArUco fails
@@ -367,7 +364,9 @@ class VisionSystem:
             if len(robot_indices) == 0:
                 raise RuntimeError("Robot not detected (ArUco or Color)")
             robot_pos_px = np.mean(robot_indices, axis=0)[::-1]
-            start_pos_cm = Point(robot_pos_px[0] / self.pxl_per_cm_x, robot_pos_px[1] / self.pxl_per_cm_y)
+            start_pos_cm = Point(
+                robot_pos_px[0] / self.pxl_per_cm_x, self.map_height - (robot_pos_px[1] / self.pxl_per_cm_y)
+            )
 
         # 4. Polygon Approximation & Buffering
         contours, _ = cv2.findContours(obstacle_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -377,8 +376,9 @@ class VisionSystem:
             epsilon = 0.01 * cv2.arcLength(cnt, True)
             poly_pts = cv2.approxPolyDP(cnt, epsilon, True).reshape(-1, 2)
             # Convert to cm immediately
+            poly_pts = poly_pts.astype(float)
             poly_pts[:, 0] = poly_pts[:, 0] / self.pxl_per_cm_x
-            poly_pts[:, 1] = poly_pts[:, 1] / self.pxl_per_cm_y
+            poly_pts[:, 1] = self.map_height - (poly_pts[:, 1] / self.pxl_per_cm_y)
 
             polygon = Polygon(poly_pts)
 
@@ -400,7 +400,7 @@ class VisionSystem:
         # In _construct_visibility_graph, we append start then goal to nodes
         start_node_id = G.number_of_nodes() - 2
         goal_node_id = G.number_of_nodes() - 1
-        
+
         return G, start_node_id, goal_node_id
 
     def _merge_close_vertices(self, pts: np.ndarray, min_dist: float = 5.0) -> np.ndarray:

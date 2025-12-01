@@ -12,8 +12,8 @@ class RobotState(Enum):
 class ThymioController:
     def __init__(self):
         # Tuning Constants
-        self.KP_ROT = 2.0  # P-gain for rotation
-        self.MAX_SPEED = 1000.0  # Thymio units
+        self.KP_ROT = 40.0  # P-gain for rotation
+        self.MAX_SPEED = 100.0  # Thymio units
         self.AVOID_SPEED = 60.0
         self.SENSOR_THRESHOLD = 2000  # Threshold to trigger avoidance
 
@@ -62,6 +62,11 @@ class ThymioController:
         # As heading_error approaches 0, cos(error) approaches 1 -> full speed
         # As heading_error approaches 90 deg, cos(error) approaches 0 -> stop and turn
         linear_speed = self.MAX_SPEED * max(0.0, math.cos(heading_error))
+
+        print(
+            f"Heading error: {heading_error:.2f} rad, Linear speed: {linear_speed:.2f}, Angular speed: {angular_speed:.2f}"
+        )
+
         l_speed = linear_speed - angular_speed
         r_speed = linear_speed + angular_speed
 
@@ -84,7 +89,7 @@ class ThymioController:
 
         # Calculate a "turning force" based on sensor difference
         # Positive = Turn Right, Negative = Turn Left
-        turn_force = (sensor_data[0] + sensor_data[1]//2) - (sensor_data[3]//2 + sensor_data[4])
+        turn_force = (sensor_data[0] + sensor_data[1] // 2) - (sensor_data[3] // 2 + sensor_data[4])
 
         # Base speed for avoidance
         base = self.AVOID_SPEED
