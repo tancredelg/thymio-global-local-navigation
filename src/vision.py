@@ -410,7 +410,7 @@ class VisionSystem:
         
         self.visu_window_name = "Live Map"
         cv2.namedWindow(self.visu_window_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(self.visu_window_name, 1000, 720)
+        cv2.resizeWindow(self.visu_window_name, 1000, 600)
 
         # Create a background image with the warped map
         self.bg_img = self.warp_image(self.img).copy()
@@ -458,8 +458,12 @@ class VisionSystem:
                 (0, 0, 255),  # robot in red
                 -1
             )
-            cv2.imshow(self.visu_window_name, frame)
-            cv2.waitKey(1)
+        cv2.imshow(self.visu_window_name, frame)
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
+            cv2.destroyWindow(self.visu_window_name)
+            return True  # signal to quit
+        return False
                         
             
 
