@@ -16,6 +16,7 @@ class VisionSystem:
         camera_index: int = 1,
         camera_resolution: Tuple[int, int] = (1920, 1080),
         map_size_cm: Tuple[float, float] = (112, 82),
+        warmup_time: int = 5,
     ):
         """
         Initializes the Vision System.
@@ -36,6 +37,7 @@ class VisionSystem:
         # Init capture device and set resolution
         self.cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
         if not self.cap.isOpened():
+            self.release()
             raise RuntimeError(
                 f"Could not open camera {camera_index}. Is it connected? Is another app using it?"
             )
@@ -43,11 +45,12 @@ class VisionSystem:
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_resolution[0])
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_resolution[1])
 
-        self.warmup_camera()
+        self.warmup_camera(warmup_time)
 
         # Capture a frame for calibration
         ret, frame = self.cap.read()
         if not ret:
+            self.release()
             raise RuntimeError("Could not capture frame for calibration")
         self.img = frame
         # Convert to RGB for processing
@@ -139,19 +142,37 @@ class VisionSystem:
         self.aruco_detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
 
     def warmup_camera(self, duration=5):
-        print(f"Warming up camera for {duration} seconds...")
-        start_time = time.time()
+        # "Smart" Warmup: Wait for Light, not just Time
 
-        while int(time.time() - start_time) < duration:
+        print(f"Warming up camera for {duration}s or until exposure settles...")
+        start_time = time.time()
+        valid_frames = 0
+
+        while True:
             ret, frame = self.cap.read()
-            if not ret:
-                print("Error reading frame during warmup.")
+
+            # Timeout check
+            if time.time() - start_time > duration + 2.0:  # Give it a little grace period
+                raise RuntimeError("Camera warmup timed out! (Received only black/empty frames)")
+
+            if not ret or frame is None:
+                time.sleep(0.1)
+                continue
+
+            # Check Brightness
+            # If the image is pitch black (mean pixel value < 10), Auto-Exposure hasn't kicked in yet.
+            # We discard these frames.
+            mean_brightness = np.mean(frame)
+            if mean_brightness < 10:
+                continue
+
+            # If we get here, the frame is valid and has light.
+            # We consume a few more to ensure stability (e.g., 30 frames ~ 1 sec)
+            valid_frames += 1
+            if valid_frames > 30:
                 break
 
-            # Optional: Add visual countdown to the video feed
-            remaining = duration - int(time.time() - start_time)
-
-        print("Warmup complete. Camera is ready.")
+        print(f"Camera ready. (Resolution: {self.cap.get(3)}x{self.cap.get(4)})")
 
     def _detect_calibration_aruco(self, img, corners, ids) -> np.ndarray:
         corners_centers = []
@@ -225,7 +246,7 @@ class VisionSystem:
 
         # print("Capturing frame from camera...")
         ret, frame = self.cap.read()
-        #print(f"Frame captured: {ret}, shape: {frame.shape if ret else 'N/A'}")
+        # print(f"Frame captured: {ret}, shape: {frame.shape if ret else 'N/A'}")
         if not ret:
             return None
         return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -247,30 +268,30 @@ class VisionSystem:
             return None
 
         warped = self.warp_image(img)
+        self.latest_warped_img = warped
         gray = cv2.cvtColor(warped, cv2.COLOR_RGB2GRAY)
 
         # Detect ArUco markers on the warped, grayscale image
-        corners, ids, _ = self.aruco_detector.detectMarkers(gray)
+        all_aruco_corners, ids, _ = self.aruco_detector.detectMarkers(gray)
 
         if ids is not None and len(ids) > 0:
             # Assume the first marker found is the robot
-            pts = corners[0][0]  # Shape (4, 2)
+            robot_aruco_corners = all_aruco_corners[0][0]  # Shape (4, 2), ie 4x (x, y) points
 
-            # Compute the angle (top left-top right perpendicular )
-            vector = pts[1] - pts[0]
-            angle = np.arctan2(vector[1], vector[0])
-            theta = (angle + 2 * np.pi) % (2 * np.pi)
+            # Flip y-axis to be y-up
+            robot_aruco_corners[:, 1] = self.map_height_pxl - robot_aruco_corners[:, 1]
 
             # Compute center
-            cx = np.mean(pts[:, 0])
-            cy = np.mean(pts[:, 1])
+            cx = np.mean(robot_aruco_corners[:, 0])
+            cy = np.mean(robot_aruco_corners[:, 1])
 
-            # Convert to world coordinates (y-up) -> Negate angle
-            theta = -theta
-
-            # Convert pixels to cm (and flip y-axis to be y-up)
+            # Convert pixels to cm
             x_cm = cx / self.pxl_per_cm_x
-            y_cm = self.map_height - (cy / self.pxl_per_cm_y)
+            y_cm = cy / self.pxl_per_cm_y
+
+            # Now compute the orientation (using left edge which corresponds to the robot's forward direction)
+            forward_vec = robot_aruco_corners[0] - robot_aruco_corners[3]  # TL - BL
+            theta = math.atan2(forward_vec[1], forward_vec[0])  # atan2(dy, dx)
 
             return Pose(x_cm, y_cm, theta)
 
@@ -296,32 +317,32 @@ class VisionSystem:
         cv2.imwrite("PPPPP.jpg", warped)
         hsv = cv2.cvtColor(warped, cv2.COLOR_BGR2HSV)
         hsv = cv2.GaussianBlur(hsv, (7, 7), 0)
+
         # 1. Segment Obstacles
-        # obstacle_lower = np.array([10, 70, 180])
-        # obstacle_upper = np.array([25, 255, 255])
-        # obstacle_mask = cv2.inRange(hsv, obstacle_lower, obstacle_upper)
-
-        obstacle_lower1 = np.array([0, 120, 70])
-        obstacle_upper1 = np.array([10, 255, 255])
-
-        # Upper red (wrap-around)
-        obstacle_lower2 = np.array([165, 120, 70])
+        # Lower red (0-25 covers red through distinct orange)
+        obstacle_lower1 = np.array([0, 70, 90])
+        obstacle_upper1 = np.array([25, 255, 255])
+        # Upper red (155-179 covers darker/purplish reds)
+        obstacle_lower2 = np.array([155, 70, 90])
         obstacle_upper2 = np.array([179, 255, 255])
+
         obstacle_mask1 = cv2.inRange(hsv, obstacle_lower1, obstacle_upper1)
         obstacle_mask2 = cv2.inRange(hsv, obstacle_lower2, obstacle_upper2)
 
         obstacle_mask = cv2.bitwise_or(obstacle_mask1, obstacle_mask2)
 
-        kernel = np.ones((5, 5), np.uint8)
+        # Morphological operations to clean up noise
+        # Increased kernel size slightly to fill larger holes
+        kernel = np.ones((7, 7), np.uint8)
         obstacle_mask = cv2.morphologyEx(obstacle_mask, cv2.MORPH_OPEN, kernel)
         obstacle_mask = cv2.morphologyEx(obstacle_mask, cv2.MORPH_CLOSE, kernel)
 
         cv2.imwrite("obstacle_mask.jpg", obstacle_mask)
         cv2.imwrite("obstacle_mask1.jpg", obstacle_mask1)
         cv2.imwrite("obstacle_mask2.jpg", obstacle_mask2)
-        # 2. Segment Target (Goal)
 
-        lower_green = np.array([35, 60, 70])
+        # 2. Segment Target (Goal)
+        lower_green = np.array([35, 60, 80])
         upper_green = np.array([85, 255, 240])
         # white_mask = cv2.inRange(hsv, lower_red2, upper_green)
         target_mask = cv2.inRange(hsv, lower_green, upper_green)
@@ -402,71 +423,141 @@ class VisionSystem:
         goal_node_id = G.number_of_nodes() - 1
 
         return G, start_node_id, goal_node_id
-    
-    def live_visu(self, g, start, end, waypoints):
+
+    def live_visu(self, g, start, end, waypoints, resolution: Tuple[int, int] = (1000, 600)):
         """
-        Init live visualization 
+        Init live visualization
         """
-        
+
         self.visu_window_name = "Live Map"
         cv2.namedWindow(self.visu_window_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(self.visu_window_name, 1000, 600)
+        cv2.resizeWindow(self.visu_window_name, *resolution)
 
-        # Create a background image with the warped map
+        # Store map elements for redrawing on live frames
+        self.visu_g = g
+        self.visu_start = start
+        self.visu_end = end
+        self.visu_waypoints = waypoints
+
+        # Create a fallback background image
         self.bg_img = self.warp_image(self.img).copy()
-        H = self.map_height
-        # Draw static graph edges on background
-        for u, v in g.edges():
-            p1 = g.nodes[u]['pos']
-            p2 = g.nodes[v]['pos']
-            cv2.line(
-                self.bg_img,
-                (int(p1[0]*self.pxl_per_cm_x), int((H-p1[1])*self.pxl_per_cm_y)),
-                (int(p2[0]*self.pxl_per_cm_x), int((H-p2[1])*self.pxl_per_cm_y)),
-                (255, 160, 122), 1
-            )
 
-        # Draw start/goal nodes
-        start_pos = g.nodes[start]['pos']
-        goal_pos = g.nodes[end]['pos']
-        cv2.circle(self.bg_img, (int(start_pos[0]*self.pxl_per_cm_x), int((H-start_pos[1])*self.pxl_per_cm_y)), 10, (0,255,0), -1)
-        cv2.circle(self.bg_img, (int(goal_pos[0]*self.pxl_per_cm_x), int((H-goal_pos[1])*self.pxl_per_cm_y)), 10, (255,0,255), -1)
-
-        # Draw planned path
-        for i in range(len(waypoints)-1):
-            p1 = waypoints[i]
-            p2 = waypoints[i+1]
-            cv2.line(
-                self.bg_img,
-                (int(p1[0]*self.pxl_per_cm_x), int((H-p1[1])*self.pxl_per_cm_y)),
-                (int(p2[0]*self.pxl_per_cm_x), int((H-p2[1])*self.pxl_per_cm_y)),
-                (255,0,0), 2
-            )
-    
-    def update_robot_visu(self):
+    def update_robot_visu(self, robot_pose: Optional[Pose] = None, target: Optional[Point] = None) -> bool:
         """
         Update robot marker on live visualization.
+        :param robot_pose: Current robot pose (optional, will capture if None)
+        :param target: Current target point (optional, for heading visualization)
+        :return: True if 'q' was pressed to quit, False otherwise
         """
-        robot_pos = self.get_robot_pose()
-        #warped = self.warp_image(self.img)
-        frame = self.bg_img.copy()
-        if robot_pos != None:
-            cv2.circle(
+        if robot_pose is None:
+            robot_pose = self.get_robot_pose()
+
+        # Use latest warped image if available, else static bg
+        if hasattr(self, "latest_warped_img"):
+            # Convert RGB to BGR for OpenCV display
+            frame = cv2.cvtColor(self.latest_warped_img, cv2.COLOR_RGB2BGR)
+        else:
+            frame = cv2.cvtColor(self.bg_img, cv2.COLOR_RGB2BGR)
+
+        H = self.map_height
+
+        # --- Draw Map Elements (Graph, Path) ---
+        if hasattr(self, "visu_g"):
+            # Draw edges
+            for u, v in self.visu_g.edges():
+                p1 = self.visu_g.nodes[u]["pos"]
+                p2 = self.visu_g.nodes[v]["pos"]
+                pt1 = (int(p1[0] * self.pxl_per_cm_x), int((H - p1[1]) * self.pxl_per_cm_y))
+                pt2 = (int(p2[0] * self.pxl_per_cm_x), int((H - p2[1]) * self.pxl_per_cm_y))
+                cv2.line(frame, pt1, pt2, (200, 200, 255), 1)  # Light Red
+
+            # Draw Path
+            if self.visu_waypoints:
+                for i in range(len(self.visu_waypoints) - 1):
+                    p1 = self.visu_waypoints[i]
+                    p2 = self.visu_waypoints[i + 1]
+                    pt1 = (int(p1[0] * self.pxl_per_cm_x), int((H - p1[1]) * self.pxl_per_cm_y))
+                    pt2 = (int(p2[0] * self.pxl_per_cm_x), int((H - p2[1]) * self.pxl_per_cm_y))
+                    cv2.line(frame, pt1, pt2, (255, 255, 0), 2)  # Cyan
+
+            # Draw Start/Goal
+            start_pos = self.visu_g.nodes[self.visu_start]["pos"]
+            goal_pos = self.visu_g.nodes[self.visu_end]["pos"]
+            s_pt = (int(start_pos[0] * self.pxl_per_cm_x), int((H - start_pos[1]) * self.pxl_per_cm_y))
+            g_pt = (int(goal_pos[0] * self.pxl_per_cm_x), int((H - goal_pos[1]) * self.pxl_per_cm_y))
+            cv2.circle(frame, s_pt, 8, (0, 255, 0), -1)
+            cv2.circle(frame, g_pt, 8, (0, 0, 255), -1)
+
+        # --- Draw Robot Pose ---
+        if robot_pose:
+            rx, ry, rtheta = robot_pose
+            # Robot Center
+            cx = int(rx * self.pxl_per_cm_x)
+            cy = int((H - ry) * self.pxl_per_cm_y)
+
+            # Direction Vector (Length 30px)
+            # World: x=cos, y=sin. Image: x=cos, y=-sin (because y is flipped)
+            dx = int(30 * math.cos(rtheta))
+            dy = int(30 * -math.sin(rtheta))
+
+            cv2.arrowedLine(frame, (cx, cy), (cx + dx, cy + dy), (150, 20, 255), 2, tipLength=0.5)
+            cv2.circle(frame, (cx, cy), 5, (150, 20, 255), -1)
+
+            # Text Label
+            pos_text = f"x={rx:.1f} y={ry:.1f}"
+            cv2.putText(
                 frame,
-                (int(robot_pos.x *self.pxl_per_cm_x), int((self.map_height-robot_pos.y)*self.pxl_per_cm_y)),
-                10,
-                (0, 0, 255),  # robot in red
-                -1
+                pos_text,
+                (cx + 12, cy - 14),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.9,
+                (150, 20, 255),
+                2,
+                cv2.LINE_AA,
             )
+            orient_text = f"theta={math.degrees(rtheta):.1f}"
+            cv2.putText(
+                frame,
+                orient_text,
+                (cx + 12, cy + 18),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.9,
+                (150, 20, 255),
+                2,
+                cv2.LINE_AA,
+            )
+
+            # --- Draw Controller Info (Target & Heading Error) ---
+            if target:
+                tx, ty = target
+                tx_px = int(tx * self.pxl_per_cm_x)
+                ty_px = int((H - ty) * self.pxl_per_cm_y)
+
+                # Line to target
+                cv2.line(frame, (cx, cy), (tx_px, ty_px), (0, 255, 255), 1)  # Yellow
+
+                # Calculate heading error for display
+                angle_to_target = math.atan2(ty - ry, tx - rx)
+                heading_error = (angle_to_target - rtheta + math.pi) % (2 * math.pi) - math.pi
+
+                err_text = f"Err: {math.degrees(heading_error):.1f} deg"
+                cv2.putText(
+                    frame,
+                    err_text,
+                    (cx + 10, cy + 20),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+
         cv2.imshow(self.visu_window_name, frame)
         key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            cv2.destroyWindow(self.visu_window_name)
-            return True  # signal to quit
+        if key == ord("q"):
+            cv2.destroyAllWindows()
+            return True
         return False
-                        
-            
-
 
     def _merge_close_vertices(self, pts: np.ndarray, min_dist: float = 5.0) -> np.ndarray:
         """

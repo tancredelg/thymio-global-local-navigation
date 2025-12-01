@@ -12,9 +12,9 @@ class RobotState(Enum):
 class ThymioController:
     def __init__(self):
         # Tuning Constants
-        self.KP_ROT = 40.0  # P-gain for rotation
-        self.MAX_SPEED = 100.0  # Thymio units
-        self.AVOID_SPEED = 60.0
+        self.KP_ROT = 120.0  # P-gain for rotation
+        self.MAX_SPEED = 120.0  # Thymio units
+        self.AVOID_SPEED = 80.0
         self.SENSOR_THRESHOLD = 2000  # Threshold to trigger avoidance
 
         # Internal State
@@ -89,13 +89,13 @@ class ThymioController:
 
         # Calculate a "turning force" based on sensor difference
         # Positive = Turn Right, Negative = Turn Left
-        turn_force = (sensor_data[0] + sensor_data[1] // 2) - (sensor_data[3] // 2 + sensor_data[4])
+        turn_force = (sensor_data[0] + sensor_data[1] * 0.25) - (sensor_data[3] * 0.25 + sensor_data[4])
 
         # Base speed for avoidance
         base = self.AVOID_SPEED
 
         # Apply gain to turn force
-        rotation = turn_force * 0.05
+        rotation = turn_force * 0.04
 
         l_speed = base + rotation
         r_speed = base - rotation
