@@ -225,7 +225,7 @@ class VisionSystem:
 
         # print("Capturing frame from camera...")
         ret, frame = self.cap.read()
-        print(f"Frame captured: {ret}, shape: {frame.shape if ret else 'N/A'}")
+        #print(f"Frame captured: {ret}, shape: {frame.shape if ret else 'N/A'}")
         if not ret:
             return None
         return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -402,6 +402,67 @@ class VisionSystem:
         goal_node_id = G.number_of_nodes() - 1
 
         return G, start_node_id, goal_node_id
+    
+    def live_visu(self, g, start, end, waypoints):
+        """
+        Init live visualization 
+        """
+        
+        self.visu_window_name = "Live Map"
+        cv2.namedWindow(self.visu_window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(self.visu_window_name, 1000, 720)
+
+        # Create a background image with the warped map
+        self.bg_img = self.warp_image(self.img).copy()
+        H = self.map_height
+        # Draw static graph edges on background
+        for u, v in g.edges():
+            p1 = g.nodes[u]['pos']
+            p2 = g.nodes[v]['pos']
+            cv2.line(
+                self.bg_img,
+                (int(p1[0]*self.pxl_per_cm_x), int((H-p1[1])*self.pxl_per_cm_y)),
+                (int(p2[0]*self.pxl_per_cm_x), int((H-p2[1])*self.pxl_per_cm_y)),
+                (255, 160, 122), 1
+            )
+
+        # Draw start/goal nodes
+        start_pos = g.nodes[start]['pos']
+        goal_pos = g.nodes[end]['pos']
+        cv2.circle(self.bg_img, (int(start_pos[0]*self.pxl_per_cm_x), int((H-start_pos[1])*self.pxl_per_cm_y)), 10, (0,255,0), -1)
+        cv2.circle(self.bg_img, (int(goal_pos[0]*self.pxl_per_cm_x), int((H-goal_pos[1])*self.pxl_per_cm_y)), 10, (255,0,255), -1)
+
+        # Draw planned path
+        for i in range(len(waypoints)-1):
+            p1 = waypoints[i]
+            p2 = waypoints[i+1]
+            cv2.line(
+                self.bg_img,
+                (int(p1[0]*self.pxl_per_cm_x), int((H-p1[1])*self.pxl_per_cm_y)),
+                (int(p2[0]*self.pxl_per_cm_x), int((H-p2[1])*self.pxl_per_cm_y)),
+                (255,0,0), 2
+            )
+    
+    def update_robot_visu(self):
+        """
+        Update robot marker on live visualization.
+        """
+        robot_pos = self.get_robot_pose()
+        #warped = self.warp_image(self.img)
+        frame = self.bg_img.copy()
+        if robot_pos != None:
+            cv2.circle(
+                frame,
+                (int(robot_pos.x *self.pxl_per_cm_x), int((self.map_height-robot_pos.y)*self.pxl_per_cm_y)),
+                10,
+                (0, 0, 255),  # robot in red
+                -1
+            )
+            cv2.imshow(self.visu_window_name, frame)
+            cv2.waitKey(1)
+                        
+            
+
 
     def _merge_close_vertices(self, pts: np.ndarray, min_dist: float = 5.0) -> np.ndarray:
         """
