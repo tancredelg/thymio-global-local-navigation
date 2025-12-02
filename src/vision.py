@@ -424,7 +424,7 @@ class VisionSystem:
 
         return G, start_node_id, goal_node_id
 
-    def live_visu(self, g, start, end, waypoints, resolution: Tuple[int, int] = (1000, 600)):
+    def init_visu(self, g, start, end, waypoints, resolution: Tuple[int, int] = (1000, 600)):
         """
         Init live visualization
         """

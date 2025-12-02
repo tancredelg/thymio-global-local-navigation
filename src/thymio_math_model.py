@@ -15,8 +15,8 @@ class Thymio:
         self.c = 0.43478 / 10.0 # Thymio Units to cm/s 
         
         # Covariances of the model (Q_model) 
-        self.sigma_x_model = 0.03        #std in x (cm)
-        self.sigma_y_model = 0.03       #std in y (cm)
+        self.sigma_x_model = 0.01        #std in x (cm)
+        self.sigma_y_model = 0.01       #std in y (cm)
         self.sigma_theta_model = 0.005  #std in theta (rad)
 
         ''' Probably will need some changes to address a better argumentation (if they work)'''
