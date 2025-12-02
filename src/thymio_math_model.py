@@ -12,7 +12,7 @@ class Thymio:
 
         self.dt = 1.0 / self.freq
 
-        self.c = 0.43478 / 10.0 # Thymio Units to cm/s 
+        self.c = 0.3375 / 10.0 #0.43478 / 10.0 # Thymio Units to cm/s 
         
         # Covariances of the model (Q_model) 
         self.sigma_x_model = 0.01        #std in x (cm)
