@@ -5,7 +5,7 @@ from shapely.geometry import Polygon, LineString
 import itertools
 import math
 from typing import Tuple, List, Optional
-from utils import Point, Pose, ROBOT_RADIUS_CM, RobotState
+from utils import Point, Pose, ROBOT_RADIUS_CM, RobotState, MissionState
 import time
 import matplotlib.pyplot as plt
 
@@ -329,8 +329,8 @@ class VisionSystem:
 
         # 1. Segment Obstacles
         # Dark blue-ish obstacles
-        lo_blue = np.array([90, 20, 90])
-        hi_blue = np.array([130, 255, 255])
+        lo_blue = np.array([90, 40, 80])
+        hi_blue = np.array([165, 255, 255])
         obstacle_mask = cv2.inRange(hsv, lo_blue, hi_blue)
 
         # Morphological operations to clean up noise
@@ -370,11 +370,11 @@ class VisionSystem:
 
         # 3. Polygon Approximation & Buffering
         contours, _ = cv2.findContours(obstacle_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        #cv2.imwrite("../vision_debug/contoursPoly.jpg", contours)
+        # cv2.imwrite("../vision_debug/contoursPoly.jpg", contours)
 
         final_polygons = []
         for cnt in contours:
-            epsilon = 0.01 * cv2.arcLength(cnt, True)
+            epsilon = 0.015 * cv2.arcLength(cnt, True)
             poly_pts = cv2.approxPolyDP(cnt, epsilon, True).reshape(-1, 2)
             # Convert to cm immediately
             poly_pts = poly_pts.astype(float)
@@ -397,8 +397,8 @@ class VisionSystem:
         self.shapely_polygons = [Polygon(poly_pts) for poly_pts in final_polygons]
         self.base_graph, _ = self._construct_visibility_graph(self.shapely_polygons, None, goal_pos_cm)
 
-        # Identify goal ID (last node added)
-        self.goal_node_idx = self.base_graph.number_of_nodes() - 1
+        # Identify goal ID (largest node ID)
+        self.goal_node_idx = max(self.base_graph.nodes)
 
         print(f"Static map built. Base graph has {self.base_graph.number_of_nodes()} nodes.")
 
@@ -421,16 +421,18 @@ class VisionSystem:
         self.bg_img = self.warp_image(self.img).copy()
 
     def update_robot_visu(
-        self, nav_mode, robot_pose: Optional[Pose] = None, target: Optional[Point] = None
+        self,
+        mission_state: MissionState,
+        controller_state: RobotState,
+        robot_pose: Optional[Pose],
+        target: Optional[Point] = None,
     ) -> bool:
         """
         Update robot marker on live visualization.
-        :param robot_pose: Current robot pose (optional, will capture if None)
+        :param robot_pose: Current robot Pose
         :param target: Current target point (optional, for heading visualization)
         :return: True if 'q' was pressed to quit, False otherwise
         """
-        if robot_pose is None:
-            robot_pose = self.get_robot_pose()
 
         # Use latest warped image if available, else static bg
         if hasattr(self, "latest_warped_img"):
@@ -454,7 +456,7 @@ class VisionSystem:
             for n in self.visu_g.nodes():
                 px, py = self.visu_g.nodes[n]["pos"]
                 pt = (int(px * self.pxl_per_cm_x), int((H - py) * self.pxl_per_cm_y))
-                cv2.circle(frame, pt, 4, (255, 75, 0), -1)  
+                cv2.circle(frame, pt, 4, (255, 75, 0), -1)
 
             # Draw Path
             if self.visu_waypoints:
@@ -475,6 +477,7 @@ class VisionSystem:
 
         # --- Draw Robot Pose ---
         if robot_pose:
+            pose_colour = (70, 0, 160)
             rx, ry, rtheta = robot_pose
             # Robot Center
             cx = int(rx * self.pxl_per_cm_x)
@@ -485,8 +488,8 @@ class VisionSystem:
             dx = int(30 * math.cos(rtheta))
             dy = int(30 * -math.sin(rtheta))
 
-            cv2.arrowedLine(frame, (cx, cy), (cx + dx, cy + dy), (150, 20, 255), 2, tipLength=0.5)
-            cv2.circle(frame, (cx, cy), 5, (150, 20, 255), -1)
+            cv2.arrowedLine(frame, (cx, cy), (cx + dx, cy + dy), pose_colour, 2, tipLength=0.6)
+            cv2.circle(frame, (cx, cy), 5, pose_colour, -1)
 
             # Text Label
             pos_text = f"x={rx:.1f} y={ry:.1f}"
@@ -495,8 +498,8 @@ class VisionSystem:
                 pos_text,
                 (cx + 12, cy - 14),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (150, 20, 255),
+                0.9,
+                pose_colour,
                 2,
                 cv2.LINE_AA,
             )
@@ -506,8 +509,8 @@ class VisionSystem:
                 orient_text,
                 (cx + 12, cy + 18),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (150, 20, 255),
+                0.9,
+                pose_colour,
                 2,
                 cv2.LINE_AA,
             )
@@ -536,19 +539,21 @@ class VisionSystem:
                     2,
                     cv2.LINE_AA,
                 )
-        if nav_mode == RobotState.NAVIGATING:
-            text_nav_mode = "Global navigation mode"
-        else:
-            text_nav_mode = "Avoidance navigation mode"
 
+        # --- Draw Mission/Controller State (merged) ---
+        state_text = "(state undefined)"
+        if mission_state == MissionState.RUNNING:
+            state_text = controller_state.name
+        else:
+            state_text = mission_state.name
 
         cv2.putText(
             frame,  # Image
-            text_nav_mode,  # Text
+            state_text,  # Text
             (20, 40),  # Position (x, y)
             cv2.FONT_HERSHEY_SIMPLEX,  # Font
-            0.7,  # Font scale
-            (0, 0, 0),  # Color (B, G, R)
+            1.0,  # Font scale
+            (0, 100, 255),  # Color (B, G, R)
             2,  # Thickness
             cv2.LINE_AA,  # Line type
         )
@@ -560,7 +565,6 @@ class VisionSystem:
             cv2.destroyAllWindows()
             return True
         return False
-    
 
     def _merge_close_vertices(self, pts: np.ndarray, min_dist: float = 5.0) -> np.ndarray:
         """
@@ -631,7 +635,7 @@ class VisionSystem:
         G = self.base_graph.copy()
 
         start_pos = Point(robot_pose.x, robot_pose.y)
-        start_node_id = G.number_of_nodes()  # Next available ID
+        start_node_id = max(G.nodes) + 1  # Next available ID (largest ID + 1)
 
         # Add start node
         G.add_node(start_node_id, pos=start_pos)
@@ -703,6 +707,15 @@ class VisionSystem:
             if self._is_visible(pt1, pt2, obstacles):
                 dist = math.dist(pt1, pt2)
                 G.add_edge(i, j, weight=dist)
+
+        # Remove nodes that are outside the map bounds
+        nodes_to_remove = []
+        for n in G.nodes:
+            p = G.nodes[n]["pos"]
+            if p.x < 0 or p.x > self.map_width or p.y < 0 or p.y > self.map_height:
+                nodes_to_remove.append(n)
+        G.remove_nodes_from(nodes_to_remove)
+        all_pts = [G.nodes[n]["pos"] for n in G.nodes]
 
         return G, all_pts
 

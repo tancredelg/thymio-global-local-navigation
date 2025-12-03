@@ -3,13 +3,14 @@ import asyncio
 import time
 import numpy as np
 import argparse
+from enum import Enum
 from tdmclient import ClientAsync
 
 # Import your modules
 from vision import VisionSystem
 from control import ThymioController
 from pathfinding import find_path
-from utils import Pose, Point, euclidean_distance
+from utils import Pose, Point, euclidean_distance, MissionState
 from extended_kalman_filter import EKF
 from thymio_math_model import Thymio
 
@@ -21,6 +22,8 @@ CAMERA_COVARIANCE = np.diag([0.0011857353432198614, 0.0017873989613467563, 6.100
 
 WAYPOINT_THRESHOLD = 3.0  # cm
 DT_NOMINAL = 0.1  # seconds (10Hz)
+KIDNAP_THRESHOLD = 200  # Threshold for ground sensor delta (lower = lifted)
+RESTART_DELAY = 2.0  # Seconds to wait after being put down
 
 
 async def run_robot(camera_index: int, warmup_time: int):
@@ -49,7 +52,7 @@ async def run_robot(camera_index: int, warmup_time: int):
     print("[Main] Constructing Map...")
     try:
         # Note: cspace_padding ensures robot doesn't clip corners
-        vis.build_static_map(cspace_padding=4.0)
+        vis.build_static_map(cspace_padding=3.0)
 
         # Get initial robot pose for planning
         print("[Main] Locating Robot...")
@@ -73,7 +76,7 @@ async def run_robot(camera_index: int, warmup_time: int):
         print(f"[Main] Path found with {len(waypoints)} waypoints.")
 
         # Initialize visualization window
-        vis.init_visu(graph, start_node_idx, goal_node_idx, waypoints, resolution=(1000, 700))
+        vis.init_visu(graph, start_node_idx, goal_node_idx, waypoints, resolution=(1300, 910))
 
     except Exception as e:
         print(f"[Main] Mapping failed: {e}")
@@ -91,6 +94,7 @@ async def run_robot(camera_index: int, warmup_time: int):
     await node.wait_for_variables(
         [
             "prox.horizontal",
+            "prox.ground.delta",
             "motor.left.target",
             "motor.right.target",
             "motor.left.speed",
@@ -103,6 +107,8 @@ async def run_robot(camera_index: int, warmup_time: int):
     thymio_model.v_l, thymio_model.v_r = 0, 0
 
     last_time = time.time()
+    mission_state = MissionState.RUNNING
+    restart_start_time = 0.0
 
     print("[Main] Starting Control Loop. Press Ctrl+C to stop.")
 
@@ -128,6 +134,7 @@ async def run_robot(camera_index: int, warmup_time: int):
             # --- B. Sensing ---
             # 1. Vision
             vision_pose_measurement = vis.get_robot_pose()
+            estimated_pose = None  # Default if not RUNNING
 
             # 2. Odometry (Motor speeds)
             try:
@@ -143,44 +150,103 @@ async def run_robot(camera_index: int, warmup_time: int):
 
             # 3. Proximity
             prox_sensors = list(node.v.prox.horizontal)
+            ground_sensors = list(node.v.prox.ground.delta)
 
-            # --- C. State Estimation (EKF) ---
-            # Predict
-            ekf.predict_step()
+            # --- Mission State Logic ---
+            # Check if robot is lifted (low delta values indicate no reflection/void)
+            is_lifted = max(ground_sensors) < KIDNAP_THRESHOLD
 
-            # Update (if camera saw tag)
-            if vision_pose_measurement is not None:
-                z = np.array(
-                    [vision_pose_measurement.x, vision_pose_measurement.y, vision_pose_measurement.theta],
-                    dtype=float,
-                )
-                ekf.update_step(z)
+            if mission_state == MissionState.RUNNING:
+                if is_lifted:
+                    print("[Mission] KIDNAPPED! Stopping motors.")
+                    mission_state = MissionState.KIDNAPPED
 
-            # Get final estimate
-            est_vec = ekf.x.flatten()
-            estimated_pose = Pose(est_vec[0], est_vec[1], est_vec[2])
+            elif mission_state == MissionState.KIDNAPPED:
+                if not is_lifted:
+                    print("[Mission] Robot grounded. Stabilizing...")
+                    mission_state = MissionState.RESTARTING
+                    restart_start_time = now
 
-            # Debug info (every few frames or always)
-            # print(f"Pose: ({estimated_pose.x:.1f}, {estimated_pose.y:.1f}) | Waypoint: {current_waypoint_idx}")
+            elif mission_state == MissionState.RESTARTING:
+                if is_lifted:
+                    print("[Mission] Kidnapped again!")
+                    mission_state = MissionState.KIDNAPPED
+                elif (now - restart_start_time) > RESTART_DELAY:
+                    print("[Mission] Stabilized. Re-planning...")
+                    try:
+                        # 1. Locate Robot
+                        start_pose = vis.get_robot_pose()
+                        if start_pose:
+                            # 2. Re-build Graph
+                            graph, start_node_idx, goal_node_idx = vis.add_robot_to_graph(start_pose)
 
-            # --- D. Path & Control Logic ---
-            if current_waypoint_idx < len(waypoints):
-                target = waypoints[current_waypoint_idx]
+                            # 3. Find Path
+                            waypoints_idx = find_path(graph, start_node_idx, goal_node_idx)
+                            waypoints = [graph.nodes[i]["pos"] for i in waypoints_idx]
 
-                dist = euclidean_distance(Point(estimated_pose.x, estimated_pose.y), target)
+                            # 4. Reset State
+                            current_waypoint_idx = 0
+                            ekf.x = np.array([[start_pose.x], [start_pose.y], [start_pose.theta]])
+                            ekf.P = INITIAL_COVARIANCE.copy()
 
-                if dist < WAYPOINT_THRESHOLD:
-                    print(f"[Nav] Reached Waypoint {current_waypoint_idx}")
-                    current_waypoint_idx += 1
+                            # 5. Update Visu
+                            vis.init_visu(
+                                graph, start_node_idx, goal_node_idx, waypoints, resolution=(1300, 910)
+                            )
 
-                if current_waypoint_idx >= len(waypoints):
-                    print("[Nav] GOAL REACHED! Stopping.")
-                    l_cmd, r_cmd = 0, 0
-                    break  # Exit loop
-                else:
-                    # Update target to next waypoint
+                            print(f"[Mission] New path found with {len(waypoints)} waypoints.")
+                            mission_state = MissionState.RUNNING
+                        else:
+                            print("[Mission] Could not locate robot. Retrying...")
+                    except Exception as e:
+                        print(f"[Mission] Re-planning failed: {e}")
+
+            # --- C. State Estimation & Control (Only if RUNNING) ---
+            if mission_state == MissionState.RUNNING:
+                # Predict
+                ekf.predict_step()
+
+                # Update (if camera saw tag)
+                if vision_pose_measurement is not None:
+                    z = np.array(
+                        [
+                            vision_pose_measurement.x,
+                            vision_pose_measurement.y,
+                            vision_pose_measurement.theta,
+                        ],
+                        dtype=float,
+                    )
+                    ekf.update_step(z)
+
+                # Get final estimate
+                est_vec = ekf.x.flatten()
+                estimated_pose = Pose(est_vec[0], est_vec[1], est_vec[2])
+
+                # Debug info (every few frames or always)
+                # print(f"Pose: ({estimated_pose.x:.1f}, {estimated_pose.y:.1f}) | Waypoint: {current_waypoint_idx}")
+
+                # --- D. Path & Control Logic ---
+                if current_waypoint_idx < len(waypoints):
                     target = waypoints[current_waypoint_idx]
-                    l_cmd, r_cmd = controller.update(estimated_pose, target, prox_sensors)
+
+                    dist = euclidean_distance(Point(estimated_pose.x, estimated_pose.y), target)
+
+                    if dist < WAYPOINT_THRESHOLD:
+                        print(f"[Nav] Reached Waypoint {current_waypoint_idx}")
+                        current_waypoint_idx += 1
+
+                    if current_waypoint_idx >= len(waypoints):
+                        print("[Nav] GOAL REACHED! Stopping.")
+                        l_cmd, r_cmd = 0, 0
+                        # Optional: Break or stay in RUNNING but stopped
+                        # break
+                    else:
+                        # Update target to next waypoint
+                        target = waypoints[current_waypoint_idx]
+                        l_cmd, r_cmd = controller.update(estimated_pose, target, prox_sensors)
+            else:
+                # If not RUNNING, stop motors
+                l_cmd, r_cmd = 0, 0
 
             # --- E. Actuation ---
             v_cmd = {
@@ -192,7 +258,7 @@ async def run_robot(camera_index: int, warmup_time: int):
 
             # --- F. Visualization ---
             # Returns True if 'q' is pressed
-            if vis.update_robot_visu(controller.state):
+            if vis.update_robot_visu(mission_state, controller.state, estimated_pose):
                 print("[Main] User requested exit.")
                 break
 
@@ -224,15 +290,17 @@ async def run_robot(camera_index: int, warmup_time: int):
             print("[Main] Robot unlocked.")
         except:
             pass
-           
+
         # Waiting exit visu with "q"
         while True:
-            if vis.update_robot_visu(controller.state):
+            if vis.update_robot_visu(mission_state, controller.state, vis.get_robot_pose()):
                 print("[Main] User requested exit.")
-                break    
+                break
 
+        del vis
         print("[Main] Cleanup complete. Exiting.")
     return
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Thymio Navigation System")

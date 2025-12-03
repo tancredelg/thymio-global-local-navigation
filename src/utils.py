@@ -3,6 +3,7 @@ import math
 from collections.abc import Callable
 from enum import Enum
 
+
 # Define a simple Point class for 2D coordinates - simply for improved type clarity & safety
 # (Behaves just like a tuple but with named fields, and constrained to two floats)
 class Point(NamedTuple):
@@ -15,10 +16,17 @@ class Pose(NamedTuple):
     x: float
     y: float
     theta: float  # Orientation in radians
-    
+
+
 class RobotState(Enum):
     NAVIGATING = "NAVIGATING"
     AVOIDING = "AVOIDING"
+
+
+class MissionState(Enum):
+    RUNNING = "RUNNING"
+    KIDNAPPED = "KIDNAPPED"
+    RESTARTING = "RESTARTING"
 
 
 # Type alias for heuristic functions
