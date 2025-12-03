@@ -16,6 +16,7 @@ class ThymioController:
         self.AVOID_SPEED = 125.0
         self.SENSOR_THRESHOLD = 400  # Threshold to trigger avoidance
         self.AVOIDANCE_DURATION = 4.0  # Number of seconds to stay in avoidance state
+        self.FRONT_SENSOR_MIN_DELTA =30
         self.last_avoidance_time = 0.0
 
 

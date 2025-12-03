@@ -35,7 +35,7 @@ class VisionSystem:
         """Height of the real-world map in cm"""
 
         # Init capture device and set resolution
-        self.cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+        self.cap = cv2.VideoCapture(camera_index) #add cv2.CAP_DSHOW if usb camera
         if not self.cap.isOpened():
             self.release()
             raise RuntimeError(
@@ -442,7 +442,7 @@ class VisionSystem:
         # Create a fallback background image
         self.bg_img = self.warp_image(self.img).copy()
 
-    def update_robot_visu(self, robot_pose: Optional[Pose] = None, target: Optional[Point] = None) -> bool:
+    def update_robot_visu(self,nav_mode, robot_pose: Optional[Pose] = None, target: Optional[Point] = None) -> bool:
         """
         Update robot marker on live visualization.
         :param robot_pose: Current robot pose (optional, will capture if None)
@@ -550,6 +550,18 @@ class VisionSystem:
                     (0, 255, 255),
                     2,
                     cv2.LINE_AA,
+                )
+        text_nav_mode  = f"Value: {nav_mode}"
+
+        cv2.putText(
+                    frame,              # Image
+                    text_nav_mode,               # Text
+                    (20, 40),           # Position (x, y)
+                    cv2.FONT_HERSHEY_SIMPLEX,  # Font
+                    1.0,                # Font scale
+                    (0, 255, 0),        # Color (B, G, R)
+                    2,                  # Thickness
+                    cv2.LINE_AA         # Line type
                 )
 
         cv2.imshow(self.visu_window_name, frame)
