@@ -5,7 +5,7 @@ from shapely.geometry import Polygon, LineString
 import itertools
 import math
 from typing import Tuple, List, Optional
-from utils import Point, Pose, ROBOT_RADIUS_CM
+from utils import Point, Pose, ROBOT_RADIUS_CM, RobotState
 import time
 import matplotlib.pyplot as plt
 
@@ -329,7 +329,7 @@ class VisionSystem:
 
         # 1. Segment Obstacles
         # Dark blue-ish obstacles
-        lo_blue = np.array([90, 70, 90])
+        lo_blue = np.array([90, 20, 90])
         hi_blue = np.array([130, 255, 255])
         obstacle_mask = cv2.inRange(hsv, lo_blue, hi_blue)
 
@@ -370,6 +370,7 @@ class VisionSystem:
 
         # 3. Polygon Approximation & Buffering
         contours, _ = cv2.findContours(obstacle_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        #cv2.imwrite("../vision_debug/contoursPoly.jpg", contours)
 
         final_polygons = []
         for cnt in contours:
@@ -535,8 +536,7 @@ class VisionSystem:
                     2,
                     cv2.LINE_AA,
                 )
-        print(nav_mode)
-        if nav_mode == "navigating":
+        if nav_mode == RobotState.NAVIGATING:
             text_nav_mode = "Global navigation mode"
         else:
             text_nav_mode = "Avoidance navigation mode"
@@ -554,6 +554,7 @@ class VisionSystem:
         )
 
         cv2.imshow(self.visu_window_name, frame)
+        cv2.imwrite("../vision_debug/visu.jpg", frame)
         key = cv2.waitKey(1) & 0xFF
         if key == ord("q"):
             cv2.destroyAllWindows()

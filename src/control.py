@@ -1,12 +1,7 @@
 import math
-from utils import Point, Pose, angle_between, normalize_angle
-from enum import Enum
+from utils import Point, Pose, angle_between, normalize_angle, RobotState
 import time
 
-
-class RobotState(Enum):
-    NAVIGATING = "NAVIGATING"
-    AVOIDING = "AVOIDING"
 
 
 class ThymioController:
@@ -22,7 +17,6 @@ class ThymioController:
 
         # Internal State
         self.state: RobotState = RobotState.NAVIGATING
-        self.state_visu = "navigating"
 
     def update(self, current_pose: Pose, target_pos: Point, sensor_data: list[int]) -> tuple[float, float]:
         """
@@ -39,7 +33,6 @@ class ThymioController:
 
         if is_obstacle_present:
             self.state = RobotState.AVOIDING
-            self.state_visu = "avoiding"
             self.last_avoidance_time = current_time
             # Active avoidance: use sensors directly
             return self._avoid_obstacles(sensor_data)
@@ -62,7 +55,6 @@ class ThymioController:
                 return int(l_cmd), int(r_cmd)
             else:
                 self.state = RobotState.NAVIGATING
-                self.state_visu = "navigating"
 
         # Default: Navigation
         return nav_l, nav_r

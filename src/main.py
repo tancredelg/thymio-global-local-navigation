@@ -192,7 +192,7 @@ async def run_robot(camera_index: int, warmup_time: int):
 
             # --- F. Visualization ---
             # Returns True if 'q' is pressed
-            if vis.update_robot_visu(controller.state_visu):
+            if vis.update_robot_visu(controller.state):
                 print("[Main] User requested exit.")
                 break
 
@@ -223,15 +223,16 @@ async def run_robot(camera_index: int, warmup_time: int):
             await node.unlock()
             print("[Main] Robot unlocked.")
         except:
-            pass       
-        # Release Camera
-        try:
-            vis.release()
-        except:
             pass
+           
+        # Waiting exit visu with "q"
+        while True:
+            if vis.update_robot_visu(controller.state):
+                print("[Main] User requested exit.")
+                break    
 
         print("[Main] Cleanup complete. Exiting.")
-
+    return
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Thymio Navigation System")
