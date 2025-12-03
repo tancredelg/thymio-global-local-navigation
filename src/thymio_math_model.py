@@ -15,9 +15,9 @@ class Thymio:
         self.c = 0.3375 / 10.0 #0.43478 / 10.0 # Thymio Units to cm/s 
         
         # Covariances of the model (Q_model) 
-        self.sigma_x_model = 0.01        #std in x (cm)
-        self.sigma_y_model = 0.01       #std in y (cm)
-        self.sigma_theta_model = 0.005  #std in theta (rad)
+        self.sigma_x_model = 0.03        #std in x (cm)
+        self.sigma_y_model = 0.03       #std in y (cm)
+        self.sigma_theta_model = 0.1  #std in theta (rad)
 
         ''' Probably will need some changes to address a better argumentation (if they work)'''
         # Input Wheel Speed Covariances thymio unit wise
@@ -35,7 +35,7 @@ class Thymio:
 
     # Thymio provides speed in thymio units which is 1 Thymio unit≈0.43478 mm/s
     def thymio_unit_to_speed(self, thymio_units): 
-        return (thymio_units * 0.43478) / 10.0 
+        return (thymio_units * self.c) 
      
     def wheel_speed_map(self): 
         V = (1.0 / 2.0) * (self.v_l + self.v_r)

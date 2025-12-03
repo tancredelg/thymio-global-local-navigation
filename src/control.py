@@ -17,7 +17,7 @@ class ThymioController:
         self.SENSOR_THRESHOLD = 400  # Threshold to trigger avoidance
         self.AVOIDANCE_DURATION = 4.0  # Number of seconds to stay in avoidance state
         self.last_avoidance_time = 0.0
-        self.FRONT_SENSOR_MIN_DELTA = 30
+
 
         # Internal State
         self.state: RobotState = RobotState.NAVIGATING
@@ -78,11 +78,11 @@ class ThymioController:
         # As heading_error approaches 0, cos(error) approaches 1 -> full speed
         # As heading_error approaches 90 deg, cos(error) approaches 0 -> stop and turn
         linear_speed = self.MAX_SPEED * max(0.0, math.cos(heading_error))
-
+        '''
         print(
             f"Heading error: {heading_error:.2f} rad, Linear speed: {linear_speed:.2f}, Angular speed: {angular_speed:.2f}"
         )
-
+        '''
         l_speed = linear_speed - angular_speed
         r_speed = linear_speed + angular_speed
 
