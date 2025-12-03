@@ -49,7 +49,23 @@ async def run_robot(camera_index: int, warmup_time: int):
     print("[Main] Constructing Map...")
     try:
         # Note: cspace_padding ensures robot doesn't clip corners
-        graph, start_node_idx, goal_node_idx = vis.construct_map(cspace_padding=4.0)
+        vis.build_static_map(cspace_padding=4.0)
+
+        # Get initial robot pose for planning
+        print("[Main] Locating Robot...")
+        # Retry a few times if needed
+        start_pose = None
+        for _ in range(3):
+            start_pose = vis.get_robot_pose()
+            if start_pose:
+                break
+            time.sleep(0.5)
+
+        if start_pose is None:
+            raise RuntimeError("Could not locate robot for initial planning")
+
+        # Augment graph with robot position
+        graph, start_node_idx, goal_node_idx = vis.add_robot_to_graph(start_pose)
 
         waypoints_idx = find_path(graph, start_node_idx, goal_node_idx)
         waypoints = [graph.nodes[i]["pos"] for i in waypoints_idx]

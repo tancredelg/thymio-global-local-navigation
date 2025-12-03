@@ -35,7 +35,7 @@ class VisionSystem:
         """Height of the real-world map in cm"""
 
         # Init capture device and set resolution
-        self.cap = cv2.VideoCapture(camera_index) #add cv2.CAP_DSHOW if usb camera
+        self.cap = cv2.VideoCapture(camera_index)  # add cv2.CAP_DSHOW if usb camera
         if not self.cap.isOpened():
             self.release()
             raise RuntimeError(
@@ -56,7 +56,7 @@ class VisionSystem:
         # Convert to RGB for processing
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        cv2.imwrite("warmup_frame.jpg", frame_rgb)
+        cv2.imwrite("../vision_debug/warmup_frame.jpg", frame_rgb)
 
         # Detect markers
         aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
@@ -200,11 +200,19 @@ class VisionSystem:
         """
         hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
 
-        # Green color range (adjust if needed)
-        lower_green = np.array([50, 50, 50])
-        upper_green = np.array([100, 100, 120])
+        # Red heart target
+        # Lower Red (covers 0-15 deg)
+        lo_red1 = np.array([0, 50, 50])
+        hi_red1 = np.array([15, 255, 255])
 
-        mask = cv2.inRange(hsv, lower_green, upper_green)
+        # Upper Red (covers 165-180 deg)
+        lo_red2 = np.array([165, 50, 50])
+        hi_red2 = np.array([180, 255, 255])
+
+        mask = cv2.bitwise_or(
+            cv2.inRange(hsv, lo_red1, hi_red1),
+            cv2.inRange(hsv, lo_red2, hi_red2),
+        )
         # Clean up mask
         kernel = np.ones((3, 3), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
@@ -297,14 +305,14 @@ class VisionSystem:
 
         return None
 
-    def construct_map(self, cspace_padding: float = 2.0) -> Tuple[nx.Graph, int, int]:
+    def build_static_map(self, cspace_padding: float = 2.0) -> None:
         """
-        Full pipeline to construct the map's visibility graph from camera input.
+        Constructs the static map (obstacles + goal) from camera input.
+        Does NOT include the robot start position.
 
         *Capture -> Warp -> Segment -> Polygonize -> Buffer -> Visibility Graph*
 
         :param cspace_padding: Additional padding (in cm) around obstacles for the robot's C-space.
-        :returns: (Graph, start_node_id, goal_node_id).
         """
 
         img = self.img
@@ -314,82 +322,53 @@ class VisionSystem:
             raise RuntimeError("Could not capture image from camera")
 
         warped = self.warp_image(img)
-        cv2.imwrite("PPPPP.jpg", warped)
+
+        cv2.imwrite("../vision_debug/warped.jpg", warped)
         hsv = cv2.cvtColor(warped, cv2.COLOR_BGR2HSV)
         hsv = cv2.GaussianBlur(hsv, (7, 7), 0)
 
         # 1. Segment Obstacles
-        # Lower red (0-25 covers red through distinct orange)
-        obstacle_lower1 = np.array([0, 70, 90])
-        obstacle_upper1 = np.array([25, 255, 255])
-        # Upper red (155-179 covers darker/purplish reds)
-        obstacle_lower2 = np.array([155, 70, 90])
-        obstacle_upper2 = np.array([179, 255, 255])
-
-        obstacle_mask1 = cv2.inRange(hsv, obstacle_lower1, obstacle_upper1)
-        obstacle_mask2 = cv2.inRange(hsv, obstacle_lower2, obstacle_upper2)
-
-        obstacle_mask = cv2.bitwise_or(obstacle_mask1, obstacle_mask2)
+        # Dark blue-ish obstacles
+        lo_blue = np.array([90, 70, 90])
+        hi_blue = np.array([130, 255, 255])
+        obstacle_mask = cv2.inRange(hsv, lo_blue, hi_blue)
 
         # Morphological operations to clean up noise
-        # Increased kernel size slightly to fill larger holes
         kernel = np.ones((7, 7), np.uint8)
         obstacle_mask = cv2.morphologyEx(obstacle_mask, cv2.MORPH_OPEN, kernel)
         obstacle_mask = cv2.morphologyEx(obstacle_mask, cv2.MORPH_CLOSE, kernel)
 
-        cv2.imwrite("obstacle_mask.jpg", obstacle_mask)
-        cv2.imwrite("obstacle_mask1.jpg", obstacle_mask1)
-        cv2.imwrite("obstacle_mask2.jpg", obstacle_mask2)
+        cv2.imwrite("../vision_debug/obstacle_mask.jpg", obstacle_mask)
 
         # 2. Segment Target (Goal)
-        lower_green = np.array([35, 60, 80])
-        upper_green = np.array([85, 255, 240])
-        # white_mask = cv2.inRange(hsv, lower_red2, upper_green)
-        target_mask = cv2.inRange(hsv, lower_green, upper_green)
+        # Red heart target
+        # Lower Red (covers 0-15 deg)
+        lo_red1 = np.array([0, 50, 50])
+        hi_red1 = np.array([15, 255, 255])
+
+        # Upper Red (covers 165-180 deg)
+        lo_red2 = np.array([165, 50, 50])
+        hi_red2 = np.array([180, 255, 255])
+
+        target_mask = cv2.bitwise_or(
+            cv2.inRange(hsv, lo_red1, hi_red1),
+            cv2.inRange(hsv, lo_red2, hi_red2),
+        )
+
         target_mask = cv2.morphologyEx(target_mask, cv2.MORPH_OPEN, kernel)
         target_mask = cv2.morphologyEx(target_mask, cv2.MORPH_CLOSE, kernel)
-        cv2.imwrite("RRRRR.jpg", target_mask)
+        cv2.imwrite("../vision_debug/target_mask.jpg", target_mask)
+
         target_indices = np.argwhere(target_mask > 0)
         if len(target_indices) == 0:
             raise RuntimeError("Target not detected")
+
         target_pos_px = np.mean(target_indices, axis=0)[::-1]  # (y, x) -> (x, y)
         goal_pos_cm = Point(
             target_pos_px[0] / self.pxl_per_cm_x, self.map_height - (target_pos_px[1] / self.pxl_per_cm_y)
         )
 
-        # 3. Get Robot Pose (Start)
-        # Try ArUco first by calling our own method (but we need to reuse the image ideally,
-        # however get_robot_pose captures a new one. For simplicity, let's re-detect on current image)
-        # Re-implementing ArUco detection on *this* frame to avoid movement issues
-        gray = cv2.cvtColor(warped, cv2.COLOR_RGB2GRAY)
-        corners, ids, _ = self.aruco_detector.detectMarkers(gray)
-        start_pos_cm: Optional[Point] = None
-
-        if ids is not None and len(ids) > 0:
-            c = corners[0][0]
-            center_x = np.mean(c[:, 0])
-            center_y = np.mean(c[:, 1])
-            start_pos_cm = Point(
-                center_x / self.pxl_per_cm_x, self.map_height - (center_y / self.pxl_per_cm_y)
-            )
-            print(start_pos_cm)
-        else:
-            # Fallback to color segmentation if ArUco fails
-            robot_lower = np.array([0, 0, 220])
-            robot_upper = np.array([179, 80, 255])
-            robot_mask = cv2.inRange(hsv, robot_lower, robot_upper)
-            robot_mask = cv2.morphologyEx(robot_mask, cv2.MORPH_OPEN, kernel)
-            robot_mask = cv2.morphologyEx(robot_mask, cv2.MORPH_CLOSE, kernel)
-
-            robot_indices = np.argwhere(robot_mask > 0)
-            if len(robot_indices) == 0:
-                raise RuntimeError("Robot not detected (ArUco or Color)")
-            robot_pos_px = np.mean(robot_indices, axis=0)[::-1]
-            start_pos_cm = Point(
-                robot_pos_px[0] / self.pxl_per_cm_x, self.map_height - (robot_pos_px[1] / self.pxl_per_cm_y)
-            )
-
-        # 4. Polygon Approximation & Buffering
+        # 3. Polygon Approximation & Buffering
         contours, _ = cv2.findContours(obstacle_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         final_polygons = []
@@ -413,16 +392,14 @@ class VisionSystem:
             final_poly_pts = self._merge_close_vertices(buffered_poly_pts, min_dist=6.0)
             final_polygons.append(final_poly_pts)
 
-        # 5. Construct Visibility Graph
-        shapely_polygons = [Polygon(poly_pts) for poly_pts in final_polygons]
-        G, _ = self._construct_visibility_graph(shapely_polygons, start_pos_cm, goal_pos_cm)
+        # 4. Construct Base Visibility Graph (Obstacles + Goal)
+        self.shapely_polygons = [Polygon(poly_pts) for poly_pts in final_polygons]
+        self.base_graph, _ = self._construct_visibility_graph(self.shapely_polygons, None, goal_pos_cm)
 
-        # Identify start and goal IDs
-        # In _construct_visibility_graph, we append start then goal to nodes
-        start_node_id = G.number_of_nodes() - 2
-        goal_node_id = G.number_of_nodes() - 1
+        # Identify goal ID (last node added)
+        self.goal_node_idx = self.base_graph.number_of_nodes() - 1
 
-        return G, start_node_id, goal_node_id
+        print(f"Static map built. Base graph has {self.base_graph.number_of_nodes()} nodes.")
 
     def init_visu(self, g, start, end, waypoints, resolution: Tuple[int, int] = (1000, 600)):
         """
@@ -442,7 +419,9 @@ class VisionSystem:
         # Create a fallback background image
         self.bg_img = self.warp_image(self.img).copy()
 
-    def update_robot_visu(self,nav_mode, robot_pose: Optional[Pose] = None, target: Optional[Point] = None) -> bool:
+    def update_robot_visu(
+        self, nav_mode, robot_pose: Optional[Pose] = None, target: Optional[Point] = None
+    ) -> bool:
         """
         Update robot marker on live visualization.
         :param robot_pose: Current robot pose (optional, will capture if None)
@@ -551,18 +530,18 @@ class VisionSystem:
                     2,
                     cv2.LINE_AA,
                 )
-        text_nav_mode  = f"Value: {nav_mode}"
+        text_nav_mode = f"Value: {nav_mode}"
 
         cv2.putText(
-                    frame,              # Image
-                    text_nav_mode,               # Text
-                    (20, 40),           # Position (x, y)
-                    cv2.FONT_HERSHEY_SIMPLEX,  # Font
-                    1.0,                # Font scale
-                    (0, 255, 0),        # Color (B, G, R)
-                    2,                  # Thickness
-                    cv2.LINE_AA         # Line type
-                )
+            frame,  # Image
+            text_nav_mode,  # Text
+            (20, 40),  # Position (x, y)
+            cv2.FONT_HERSHEY_SIMPLEX,  # Font
+            1.0,  # Font scale
+            (0, 255, 0),  # Color (B, G, R)
+            2,  # Thickness
+            cv2.LINE_AA,  # Line type
+        )
 
         cv2.imshow(self.visu_window_name, frame)
         key = cv2.waitKey(1) & 0xFF
@@ -598,24 +577,87 @@ class VisionSystem:
 
         return np.array(new_pts).reshape(-1, 2)
 
+    def _is_visible(self, pt1: Point, pt2: Point, obstacles: List[Polygon]) -> bool:
+        """
+        Checks if the line segment between pt1 and pt2 is visible (not blocked by obstacles).
+        """
+        line = LineString([pt1, pt2])
+        dist = line.length
+
+        # Skip if line is invalid ("zero" length)
+        if dist < 1e-6:
+            return True
+
+        # We shrink the line slightly to avoid "touching" errors at vertices.
+        l_start = line.interpolate(0.001 * dist)
+        l_end = line.interpolate(0.999 * dist)
+        test_line = LineString([l_start, l_end])
+
+        for poly in obstacles:
+            # Check 1: Does the shrunk line hit an obstacle?
+            if test_line.intersects(poly):
+                return False
+
+            # Check 2 (Crucial for Concave shapes):
+            # If the line is completely WITHIN a single polygon
+            if test_line.within(poly):
+                return False
+
+        return True
+
+    def add_robot_to_graph(self, robot_pose: Pose) -> Tuple[nx.Graph, int, int]:
+        """
+        Augments the base visibility graph with the robot's current position as the start node.
+
+        :param robot_pose: Current robot pose.
+        :return: (Augmented Graph, start_node_id, goal_node_id)
+        """
+        if not hasattr(self, "base_graph"):
+            raise RuntimeError("Base graph not built. Call build_static_map() first.")
+
+        # Create a copy of the base graph
+        G = self.base_graph.copy()
+
+        start_pos = Point(robot_pose.x, robot_pose.y)
+        start_node_id = G.number_of_nodes()  # Next available ID
+
+        # Add start node
+        G.add_node(start_node_id, pos=start_pos)
+
+        # Connect start node to all other visible nodes
+        for node_id in G.nodes:
+            if node_id == start_node_id:
+                continue
+
+            target_pos = G.nodes[node_id]["pos"]
+
+            if self._is_visible(start_pos, target_pos, self.shapely_polygons):
+                dist = math.dist(start_pos, target_pos)
+                G.add_edge(start_node_id, node_id, weight=dist)
+
+        return G, start_node_id, self.goal_node_idx
+
     def _construct_visibility_graph(
         self,
         obstacles: List[Polygon],
-        start_pos: Point,
+        start_pos: Optional[Point],
         goal_pos: Point,
     ) -> Tuple[nx.Graph, List[Point]]:
         """
         Constructs a visibility graph given polygon obstacles, and start & goal positions.
 
         :param obstacles: List of Shapely Polygons representing the obstacles in world space (cm).
-        :param start_pos: Starting point in world space (cm).
+        :param start_pos: Starting point in world space (cm). If None, only obstacles and goal are connected.
         :param goal_pos: Goal point in world space (cm).
         """
 
         G = nx.Graph()
-        # Collect all nodes (pts): obstacle vertices + start + goal
+        # Collect all nodes (pts): obstacle vertices + goal (+ start if provided)
         obstacle_vertices = [Point(*pt) for poly in obstacles for pt in poly.exterior.coords[:-1]]
-        all_pts = obstacle_vertices + [start_pos, goal_pos]
+        all_pts = obstacle_vertices + [goal_pos]
+
+        if start_pos:
+            all_pts.append(start_pos)
 
         # Add all nodes to graph - list[Point] -> {index: {"pos": Point}}
         for i, pt in enumerate(all_pts):
@@ -646,37 +688,8 @@ class VisionSystem:
             if G.has_edge(i, j):
                 continue
 
-            line = LineString([pt1, pt2])
-            dist = line.length
-
-            # Skip if line is invalid ("zero" length)
-            if dist < 1e-6:
-                continue
-
-            # --- INTERSECTION TEST ---
-            is_visible = True
-
-            # We shrink the line slightly to avoid "touching" errors at vertices.
-            # Done by interpolating 0.1% from start and 99.9% from start (=0.1% from end).
-            l_start = line.interpolate(0.001 * dist)
-            l_end = line.interpolate(0.999 * dist)
-            test_line = LineString([l_start, l_end])
-
-            for poly in obstacles:
-                # Check 1: Does the shrunk line hit an obstacle?
-                if test_line.intersects(poly):
-                    is_visible = False
-                    break
-
-                # Check 2 (Crucial for Concave shapes):
-                # If the line is completely WITHIN a single polygon (e.g. connecting tips of a 'U' shape),
-                # intersects might be False, but the path is invalid.
-                if test_line.within(poly):
-                    is_visible = False
-                    break
-
-            # 3. Add edge if visible
-            if is_visible:
+            if self._is_visible(pt1, pt2, obstacles):
+                dist = math.dist(pt1, pt2)
                 G.add_edge(i, j, weight=dist)
 
         return G, all_pts

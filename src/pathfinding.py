@@ -35,6 +35,11 @@ def find_path(
     :return: List of node IDs representing the path from start to goal.
     """
 
+    if start_node not in graph:
+        raise ValueError(f"Start node {start_node} not in graph")
+    if goal_node not in graph:
+        raise ValueError(f"Goal node {goal_node} not in graph")
+
     # 1. Initialize Open Set (Priority Queue)
     # Stores tuples of (f_cost, node_id).
     # Heapq is a min-heap, so always pops the item with the lowest first element (lowest f_cost).
