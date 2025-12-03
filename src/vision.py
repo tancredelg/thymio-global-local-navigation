@@ -448,7 +448,12 @@ class VisionSystem:
                 p2 = self.visu_g.nodes[v]["pos"]
                 pt1 = (int(p1[0] * self.pxl_per_cm_x), int((H - p1[1]) * self.pxl_per_cm_y))
                 pt2 = (int(p2[0] * self.pxl_per_cm_x), int((H - p2[1]) * self.pxl_per_cm_y))
-                cv2.line(frame, pt1, pt2, (200, 200, 255), 1)  # Light Red
+                cv2.line(frame, pt1, pt2, (255, 75, 0), 1)  # Light Red
+            # Draw nodes (dots)
+            for n in self.visu_g.nodes():
+                px, py = self.visu_g.nodes[n]["pos"]
+                pt = (int(px * self.pxl_per_cm_x), int((H - py) * self.pxl_per_cm_y))
+                cv2.circle(frame, pt, 4, (255, 75, 0), -1)  
 
             # Draw Path
             if self.visu_waypoints:
@@ -457,15 +462,15 @@ class VisionSystem:
                     p2 = self.visu_waypoints[i + 1]
                     pt1 = (int(p1[0] * self.pxl_per_cm_x), int((H - p1[1]) * self.pxl_per_cm_y))
                     pt2 = (int(p2[0] * self.pxl_per_cm_x), int((H - p2[1]) * self.pxl_per_cm_y))
-                    cv2.line(frame, pt1, pt2, (255, 255, 0), 2)  # Cyan
+                    cv2.line(frame, pt1, pt2, (100, 200, 0), 2)  # Cyan
 
             # Draw Start/Goal
             start_pos = self.visu_g.nodes[self.visu_start]["pos"]
             goal_pos = self.visu_g.nodes[self.visu_end]["pos"]
             s_pt = (int(start_pos[0] * self.pxl_per_cm_x), int((H - start_pos[1]) * self.pxl_per_cm_y))
             g_pt = (int(goal_pos[0] * self.pxl_per_cm_x), int((H - goal_pos[1]) * self.pxl_per_cm_y))
-            cv2.circle(frame, s_pt, 8, (0, 255, 0), -1)
-            cv2.circle(frame, g_pt, 8, (0, 0, 255), -1)
+            cv2.circle(frame, s_pt, 8, (100, 200, 0), -1)
+            cv2.circle(frame, g_pt, 8, (0, 0, 180), -1)
 
         # --- Draw Robot Pose ---
         if robot_pose:
@@ -489,7 +494,7 @@ class VisionSystem:
                 pos_text,
                 (cx + 12, cy - 14),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.9,
+                0.5,
                 (150, 20, 255),
                 2,
                 cv2.LINE_AA,
@@ -500,7 +505,7 @@ class VisionSystem:
                 orient_text,
                 (cx + 12, cy + 18),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.9,
+                0.5,
                 (150, 20, 255),
                 2,
                 cv2.LINE_AA,
@@ -530,15 +535,20 @@ class VisionSystem:
                     2,
                     cv2.LINE_AA,
                 )
-        text_nav_mode = f"Value: {nav_mode}"
+        print(nav_mode)
+        if nav_mode == "navigating":
+            text_nav_mode = "Global navigation mode"
+        else:
+            text_nav_mode = "Avoidance navigation mode"
+
 
         cv2.putText(
             frame,  # Image
             text_nav_mode,  # Text
             (20, 40),  # Position (x, y)
             cv2.FONT_HERSHEY_SIMPLEX,  # Font
-            1.0,  # Font scale
-            (0, 255, 0),  # Color (B, G, R)
+            0.7,  # Font scale
+            (0, 0, 0),  # Color (B, G, R)
             2,  # Thickness
             cv2.LINE_AA,  # Line type
         )
@@ -549,6 +559,7 @@ class VisionSystem:
             cv2.destroyAllWindows()
             return True
         return False
+    
 
     def _merge_close_vertices(self, pts: np.ndarray, min_dist: float = 5.0) -> np.ndarray:
         """

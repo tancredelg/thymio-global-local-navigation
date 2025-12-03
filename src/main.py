@@ -192,7 +192,7 @@ async def run_robot(camera_index: int, warmup_time: int):
 
             # --- F. Visualization ---
             # Returns True if 'q' is pressed
-            if vis.update_robot_visu(controller.state):
+            if vis.update_robot_visu(controller.state_visu):
                 print("[Main] User requested exit.")
                 break
 
@@ -223,8 +223,7 @@ async def run_robot(camera_index: int, warmup_time: int):
             await node.unlock()
             print("[Main] Robot unlocked.")
         except:
-            pass
-
+            pass       
         # Release Camera
         try:
             vis.release()
