@@ -258,7 +258,7 @@ async def run_robot(camera_index: int, warmup_time: int):
 
             # --- F. Visualization ---
             # Returns True if 'q' is pressed
-            if vis.update_robot_visu(mission_state, controller.state, estimated_pose):
+            if vis.update_robot_visu(mission_state, controller.state, estimated_pose, target):
                 print("[Main] User requested exit.")
                 break
 

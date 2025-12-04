@@ -426,6 +426,8 @@ class VisionSystem:
         controller_state: RobotState,
         robot_pose: Optional[Pose],
         target: Optional[Point] = None,
+
+        
     ) -> bool:
         """
         Update robot marker on live visualization.
@@ -466,6 +468,8 @@ class VisionSystem:
                     pt1 = (int(p1[0] * self.pxl_per_cm_x), int((H - p1[1]) * self.pxl_per_cm_y))
                     pt2 = (int(p2[0] * self.pxl_per_cm_x), int((H - p2[1]) * self.pxl_per_cm_y))
                     cv2.line(frame, pt1, pt2, (100, 200, 0), 2)  # Cyan
+                    
+
 
             # Draw Start/Goal
             start_pos = self.visu_g.nodes[self.visu_start]["pos"]
@@ -475,6 +479,7 @@ class VisionSystem:
             cv2.circle(frame, s_pt, 8, (100, 200, 0), -1)
             cv2.circle(frame, g_pt, 8, (0, 0, 180), -1)
 
+            
         # --- Draw Robot Pose ---
         if robot_pose:
             pose_colour = (70, 0, 160)
@@ -523,7 +528,7 @@ class VisionSystem:
 
                 # Line to target
                 cv2.line(frame, (cx, cy), (tx_px, ty_px), (0, 255, 255), 1)  # Yellow
-
+                cv2.circle(frame, (tx_px, ty_px), 4, (0, 255, 255), -1)
                 # Calculate heading error for display
                 angle_to_target = math.atan2(ty - ry, tx - rx)
                 heading_error = (angle_to_target - rtheta + math.pi) % (2 * math.pi) - math.pi
