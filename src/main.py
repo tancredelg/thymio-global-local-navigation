@@ -121,6 +121,10 @@ async def run_robot(camera_index: int, warmup_time: int):
             dt_real = now - last_time
             last_time = now
 
+            estimated_pose = None
+            ekf_pred_pose = None
+            target = None
+
             # Clamp dt to avoid explosions if lag occurs
             if dt_real <= 0:
                 dt_real = DT_NOMINAL
@@ -205,6 +209,8 @@ async def run_robot(camera_index: int, warmup_time: int):
             if mission_state == MissionState.RUNNING:
                 # Predict
                 ekf.predict_step()
+                pred_vec = ekf.x.flatten()
+                ekf_pred_pose = Pose(pred_vec[0],pred_vec[1] ,pred_vec[2])
 
                 # Update (if camera saw tag)
                 if vision_pose_measurement is not None:
@@ -258,7 +264,15 @@ async def run_robot(camera_index: int, warmup_time: int):
 
             # --- F. Visualization ---
             # Returns True if 'q' is pressed
-            if vis.update_robot_visu(mission_state, controller.state, estimated_pose, target):
+            if vis.update_robot_visu(
+                mission_state,
+                controller.state,
+                estimated_pose,
+                target,
+                ekf_est_pose=estimated_pose,
+                ekf_pred_pose=ekf_pred_pose,
+                ekf_cov=ekf.P if estimated_pose is not None else None,
+                ):
                 print("[Main] User requested exit.")
                 break
 
