@@ -1,0 +1,9 @@
+# Image directories
+images/
+vision_debug/
+
+# Compiled Python files (anywhere)
+**/__pycache__/
+
+# Virtual environment directory
+venv/
