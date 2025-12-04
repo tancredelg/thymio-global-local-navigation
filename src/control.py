@@ -1,120 +1,135 @@
-import math
-from utils import Point, Pose, angle_between, normalize_angle, RobotState
 import time
-
+import math
+from utils import Point, Pose, RobotState, angle_between, normalize_angle
 
 
 class ThymioController:
     def __init__(self):
-        self.KP_ROT = 120.0  # P-gain for rotation
-        self.MAX_SPEED = 125.0  # Thymio units
-        self.AVOID_SPEED = 125.0
-        self.SENSOR_THRESHOLD = 400  # Threshold to trigger avoidance
-        self.AVOIDANCE_DURATION = 4.0  # Number of seconds to stay in avoidance state
-        self.FRONT_SENSOR_MIN_DELTA =30
-        self.last_avoidance_time = 0.0
+        # Control parameters
+        self.MAX_LIN_SPEED = 125.0
+        """Maximum linear speed of the Thymio robot, in Thymio units."""
+        self.KP_ROT = 120.0
+        """Proportional gain for rotational control."""
+        self.PROXH_SENSOR_THRESHOLD = 400
+        """Minimum horizontal proximity sensor reading to consider an obstacle "detected"."""
+        self.FRONT_SENSOR_MIN_DELTA = 30
+        """Minimum difference between front sensor readings to consider an obstacle "detected"."""
+        self.AVOID_LIN_SPEED = 125.0
+        """Base speed during local obstacle avoidance."""
+        self.AVOID_TURN_WEIGHT_MULTIPLIER = 0.025
+        """Multiplier for sensor-derived turning weight during obstacle avoidance."""
+        self.AVOID_DECAY_DURATION = 4.0
+        """Time in seconds over which to "decay" from avoidance behavior back to navigation."""
 
-
-        # Internal State
+        # State variables
         self.state: RobotState = RobotState.NAVIGATING
+        self.last_avoid_time = 0.0
 
-    def update(self, current_pose: Pose, target_pos: Point, sensor_data: list[int]) -> tuple[float, float]:
+    def update(
+        self,
+        current_pose: Pose,
+        target_point: Point,
+        proxh_sensor_data: list[int],
+    ) -> tuple[int, int]:
         """
-        Update control commands based on current pose, target position, and sensor data.
+        Updates control commands based on current state, target, and sensor data.
+
+        :param current_pose: Current robot pose
+        :param target_point: Target position to navigate to
+        :param proxh_sensor_data: List of horizontal proximity sensor readings
+        :return: Tuple of (left_wheel_speed, right_wheel_speed)
         """
+
         current_time = time.time()
 
         # Check for obstacles in front 5 sensors
-        max_front_sensor = max(sensor_data[0:5])
-        is_obstacle_present = max_front_sensor > self.SENSOR_THRESHOLD
+        max_front_sensor = max(proxh_sensor_data[0:5])
+        is_obstacle_present = max_front_sensor > self.PROXH_SENSOR_THRESHOLD
 
-        # Calculate Navigation Component (Base behavior)
-        nav_l, nav_r = self._move_to_point(current_pose, target_pos)
-
-        if is_obstacle_present:
+        if is_obstacle_present:  # Enter AVOIDING state (newly triggered)
             self.state = RobotState.AVOIDING
-            self.last_avoidance_time = current_time
-            # Active avoidance: use sensors directly
-            return self._avoid_obstacles(sensor_data)
+            self.last_avoid_time = current_time
+            return self._avoid_obstacles(proxh_sensor_data)  # (active avoidance - use sensors directly)
 
-        elif self.state == RobotState.AVOIDING:
-            elapsed = current_time - self.last_avoidance_time
-            if elapsed < self.AVOIDANCE_DURATION:
-                # Decay phase: Blend "Drive Straight" with "Move to Point"
-                # 1.0 = Drive Straight, 0.0 = Move to Point
-                decay = max(0.0, 1.0 - (elapsed / self.AVOIDANCE_DURATION))
+        # Calculate navigation commands (base behavior)
+        l_speed_nav, r_speed_nav = self._move_to_point(current_pose, target_point)
 
-                # Drive straight component
-                straight_l = self.MAX_SPEED
-                straight_r = self.MAX_SPEED
+        match self.state:
+            case RobotState.NAVIGATING:
+                return l_speed_nav, r_speed_nav
+            case RobotState.AVOIDING:
+                # We are in the decay phase after initial avoidance
 
-                # Blend controls
-                l_cmd = decay * straight_l + (1.0 - decay) * nav_l
-                r_cmd = decay * straight_r + (1.0 - decay) * nav_r
+                # Calculate time since last avoidance trigger to determine decay progress
+                time_since_last_avoid = current_time - self.last_avoid_time
 
-                return int(l_cmd), int(r_cmd)
-            else:
-                self.state = RobotState.NAVIGATING
+                if time_since_last_avoid >= self.AVOID_DECAY_DURATION:
+                    self.state = RobotState.NAVIGATING
+                    return l_speed_nav, r_speed_nav
 
-        # Default: Navigation
-        return nav_l, nav_r
+                # Still in decay phase - calculate normalized decay factor/progress to interpolate speeds
+                # 1.0 = 100% Drive Straight, 0.0 = 100% Move to Point
+                decay = max(0.0, 1.0 - (time_since_last_avoid / self.AVOID_DECAY_DURATION))
 
-    def _move_to_point(self, current_pose: Pose, target_pos: Point) -> tuple[float, float]:
+                l_speed_straight = self.MAX_LIN_SPEED
+                r_speed_straight = self.MAX_LIN_SPEED
+
+                # Linearly interpolate between straight and navigation speeds
+                l_cmd = int(decay * l_speed_straight + (1.0 - decay) * l_speed_nav)
+                r_cmd = int(decay * r_speed_straight + (1.0 - decay) * r_speed_nav)
+
+                return l_cmd, r_cmd
+            case _:
+                raise ValueError(f"Unknown RobotState: {self.state}")
+
+    def _move_to_point(self, current_pose: Pose, target_point: Point) -> tuple[int, int]:
         """
-        P-Controlled navigation to a target point.
+        Calculates wheel speeds to move towards a target point from a current pose,
+        using a simple proportional controller for heading.
         """
 
         # Calculate heading error
-        angle_to_target = angle_between(current_pose, target_pos)
+        angle_to_target = angle_between(current_pose, target_point)
         heading_error = normalize_angle(angle_to_target - current_pose.theta)
-
-        # Calculate (P-controlled) angular and (regulated) linear speeds
-        angular_speed = self.KP_ROT * heading_error
 
         # As heading_error approaches 0, cos(error) approaches 1 -> full speed
         # As heading_error approaches 90 deg, cos(error) approaches 0 -> stop and turn
-        linear_speed = self.MAX_SPEED * max(0.0, math.cos(heading_error))
-        '''
-        print(
-            f"Heading error: {heading_error:.2f} rad, Linear speed: {linear_speed:.2f}, Angular speed: {angular_speed:.2f}"
-        )
-        '''
-        l_speed = linear_speed - angular_speed
-        r_speed = linear_speed + angular_speed
+        linear_speed = self.MAX_LIN_SPEED * max(0.0, math.cos(heading_error))
 
-        return int(l_speed), int(r_speed)
+        # Angular speed proportional to heading error
+        angular_speed = self.KP_ROT * heading_error
 
-    def _avoid_obstacles(self, sensor_data: list[int]) -> tuple[float, float]:
+        l_speed = int(linear_speed - angular_speed)
+        r_speed = int(linear_speed + angular_speed)
+
+        return l_speed, r_speed
+
+    def _avoid_obstacles(self, proxh_sensor_data: list[int]) -> tuple[int, int]:
         """
-        Simple obstacle avoidance behavior based on proximity sensor readings.
+        Calculates wheel speeds to avoid obstacles based on proximity sensor readings.
         """
 
-        # Simple Braitenberg-style logic:
-        # "If left sensor sees something, speed up right wheel (turn right)"
-        # "If right sensor sees something, speed up left wheel (turn left)"
+        # Base avoidance weigths for front sensors
+        # Weighs inner front sensors more heavily for turning
+        outer_sensor_weight = 1.0  # Sensor 0 and 4
+        inner_sensor_weight = 1.7  # Sensor 1 and 3
 
-        # Map sensors to weights (simplified example)
-        # sensors: [LeftMost, Left, Center, Right, RightMost]
-
-        # Calculate a "turning force" based on sensor difference
-        # Positive = Turn Right, Negative = Turn Left
-        inner_sensor_weight = 1.7
-        outer_sensor_weight = 1.0
-        if abs(sensor_data[1] - sensor_data[3]) < self.FRONT_SENSOR_MIN_DELTA:
+        # If both inner front sensors are very close in reading, we are likely facing a wall head-on
+        # To avoid a deadlock, bias more strongly to turning (using outer sensors)
+        if abs(proxh_sensor_data[1] - proxh_sensor_data[3]) < self.FRONT_SENSOR_MIN_DELTA:
             inner_sensor_weight = 0.0
             outer_sensor_weight = 2.3
 
+        # Sum the weighted sensor readings to determine turn direction
         turn_weight = (
-            sensor_data[0] * outer_sensor_weight
-            + sensor_data[1] * inner_sensor_weight
-            - sensor_data[3] * inner_sensor_weight
-            - sensor_data[4] * outer_sensor_weight
+            proxh_sensor_data[0] * outer_sensor_weight
+            + proxh_sensor_data[1] * inner_sensor_weight
+            - proxh_sensor_data[3] * inner_sensor_weight
+            - proxh_sensor_data[4] * outer_sensor_weight
         )
 
-        # Apply gain to turn force
-        angular_speed = turn_weight * 0.025
+        angular_speed = turn_weight * self.AVOID_TURN_WEIGHT_MULTIPLIER
+        l_speed = int(self.AVOID_LIN_SPEED + angular_speed)
+        r_speed = int(self.AVOID_LIN_SPEED - angular_speed)
 
-        l_speed = self.AVOID_SPEED + angular_speed
-        r_speed = self.AVOID_SPEED - angular_speed
-
-        return int(l_speed), int(r_speed)
+        return l_speed, r_speed
