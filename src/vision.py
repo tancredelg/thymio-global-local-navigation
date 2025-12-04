@@ -438,16 +438,16 @@ class VisionSystem:
         :param controller_state: Low-level controller state (RobotState)
         :param robot_pose: Current robot Pose from vision (can be None)
         :param target: Current target point (optional, for heading visualization)
-        :param ekf_pred_pose: Pose PREDICHA por EKF (antes del update)
-        :param ekf_cov: Matriz de covarianza 3x3 del EKF (para elipse)
-        :return: True si se presiona 'q' para salir, False en otro caso
+        :param ekf_pred_pose: Pose PREDICTED by EKF (before update)
+        :param ekf_cov: Covariance Matrix 3x3 del EKF (for elipse)
+        :return: True if 'q' is pressed to exit, False en otro caso
         """
 
-        # Inicializar buffers de trayectoria si no existen
+        # Inicialize trajectory buffers if non existent 
         if not hasattr(self, "ekf_est_traj"):
-            self.ekf_est_traj = []   # lista de (x, y) en cm (estimado EKF)
+            self.ekf_est_traj = []   # list (x, y) in cm (estimation from EKF)
         if not hasattr(self, "ekf_pred_traj"):
-            self.ekf_pred_traj = []  # lista de (x, y) en cm (predicho EKF)
+            self.ekf_pred_traj = []  # list (x, y) in cm (predicted from EKF)
 
         # Use latest warped image if available, else static bg
         if hasattr(self, "latest_warped_img"):
@@ -499,21 +499,20 @@ class VisionSystem:
             cv2.circle(frame, g_pt, 8, (0, 0, 180), -1)
         
 
-        # Punto amarillo en la pose PREDICHA actual
+        # Yellow dot for showing PREDICTED actual pose 
         if ekf_pred_pose is not None:
             px = int(ekf_pred_pose.x * self.pxl_per_cm_x)
             py = int((H - ekf_pred_pose.y) * self.pxl_per_cm_y)
             cv2.circle(frame, (px, py), 4, (0, 255, 255), -1)  # Yellow
 
-        # ===================== ELIPSE DE INCERTIDUMBRE ===================== #
-        # Dibujar antes del robot para que el robot quede "encima"
+        # ===================== UNCERTAINTY ELLIPSE ===================== #
         if (
             mission_state == MissionState.RUNNING
             and robot_pose is not None
             and ekf_cov is not None
         ):
             try:
-                # Tomar solo la covarianza de posición (x, y)
+                # Just (x, y) covariance 
                 Sigma_xy = np.array(
                     [
                         [ekf_cov[0, 0], ekf_cov[0, 1]],
@@ -574,7 +573,6 @@ class VisionSystem:
                     cv2.LINE_AA,
                 )
             except Exception:
-                # En caso de cualquier problema numérico, no queremos tronar el loop
                 pass
 
         # --- Draw Robot Pose ---
@@ -644,7 +642,7 @@ class VisionSystem:
                 )
                 """
         
-
+        # ESTIMATED TRAJECTORY (EKF ESTIMATION): purple
         if len(self.ekf_est_traj) > 1:
             for i in range(1, len(self.ekf_est_traj)):
                 x1, y1 = self.ekf_est_traj[i - 1]
@@ -653,7 +651,7 @@ class VisionSystem:
                 pt2 = (int(x2 * self.pxl_per_cm_x), int((H - y2) * self.pxl_per_cm_y))
                 cv2.line(frame, pt1, pt2, (pose_colour), 2) 
         
-        # Trayectoria PREDICHA (solo modelo): amarillo
+        # PREDICTED TRAJECTORY (just model): yellow
         if len(self.ekf_pred_traj) > 1:
             for i in range(1, len(self.ekf_pred_traj)):
                 x1, y1 = self.ekf_pred_traj[i - 1]

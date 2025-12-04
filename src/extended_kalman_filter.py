@@ -29,15 +29,6 @@ class EKF:
     def update_step(self, z) -> bool:
         # print("[EKF] ENTER update_step, z =", z)
 
-        # # --- KIDNAP DETECTION ---
-        # # Calculate geometric distance of the jump
-        # jump_dist = np.linalg.norm(z[:2])  # Distance in x,y
-
-        # # Threshold that is physically impossible for Thymio to move in one step (0.1s)
-        # if jump_dist > self.POS_JUMP_THRESHOLD_CM:
-        #     print(f"[EKF] KIDNAP DETECTED! Jump: {jump_dist:.1f}cm")
-        #     return False  # Signal failure/kidnap
-
         H = np.eye(3)
         z = np.array(z, dtype=float).reshape(3, 1)
 

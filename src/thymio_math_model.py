@@ -74,20 +74,11 @@ class Thymio:
     def compute_Q(self, x):
         G = self.jacobian_G(x)
 
-        # Obtained through experimentation and data analysis of variances 
-        # kvl = 0.47 
-        # kvr = 0.51 
         u_l = self.v_l / self.c 
         u_r = self.v_r / self.c 
 
         var_u_l = (self.c**2) * max(self.kvl * abs(u_l) + self.var_vl_base, self.var_vl_base) 
         var_u_r = (self.c**2) * max(self.kvr * abs(u_r) + self.var_vr_base, self.var_vr_base)
-
-        
-        # sigma_vl = max(self.kvl * abs(self.v_l) + self.sigma_vl_base,
-        #                self.sigma_vl_base)
-        # sigma_vr = max(self.kvr * abs(self.v_r) + self.sigma_vr_base,
-        #                self.sigma_vr_base)
 
         sigma_u = np.diag([var_u_l, var_u_r]) 
 
