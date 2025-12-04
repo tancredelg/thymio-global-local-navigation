@@ -426,6 +426,9 @@ class VisionSystem:
         controller_state: RobotState,
         robot_pose: Optional[Pose],
         target: Optional[Point] = None,
+        ekf_est_pose: Optional[Pose] = None,
+        ekf_pred_pose: Optional[Pose] = None,
+        ekf_cov: Optional[np.ndarray] = None,
 
         
     ) -> bool:
@@ -434,9 +437,26 @@ class VisionSystem:
         :param robot_pose: Current robot Pose
         :param target: Current target point (optional, for heading visualization)
         :return: True if 'q' was pressed to quit, False otherwise
-        """
 
-        # Use latest warped image if available, else static bg
+        :param ekf_est_pose: Pose ESTIMADA por EKF (después del update)
+        :param ekf_pred_pose: Pose PREDICHA por EKF (antes del update)
+        :param ekf_cov: Matriz de covarianza 3x3 del EKF (para elipse)
+        :return: True si se presiona 'q' para salir, False en otro caso
+        """
+        import math
+        import numpy as np
+        import cv2
+
+        # Inicializar buffers de trayectoria si no existen
+        if not hasattr(self, "ekf_est_traj"):
+            self.ekf_est_traj = []   # lista de (x, y) en cm
+        if not hasattr(self, "ekf_pred_traj"):
+            self.ekf_pred_traj = []  # lista de (x, y) en cm
+
+        if robot_pose is None:
+            robot_pose = self.get_robot_pose()
+
+        # Usar última imagen warpeada, si existe; si no, el background estático
         if hasattr(self, "latest_warped_img"):
             # Convert RGB to BGR for OpenCV display
             frame = cv2.cvtColor(self.latest_warped_img, cv2.COLOR_RGB2BGR)
@@ -445,7 +465,16 @@ class VisionSystem:
 
         H = self.map_height
 
-        # --- Draw Map Elements (Graph, Path) ---
+        # ===================== EKF TRAJECTORY BUFFERS ===================== #
+        # Acumular trayectoria ESTIMADA
+        if ekf_est_pose is not None:
+            self.ekf_est_traj.append((float(ekf_est_pose.x), float(ekf_est_pose.y)))
+
+        # Acumular trayectoria PREDICHA
+        if ekf_pred_pose is not None:
+            self.ekf_pred_traj.append((float(ekf_pred_pose.x), float(ekf_pred_pose.y)))
+
+        # ===================== MAP & GRAPH ===================== #
         if hasattr(self, "visu_g"):
             # Draw edges
             for u, v in self.visu_g.edges():
@@ -478,9 +507,69 @@ class VisionSystem:
             g_pt = (int(goal_pos[0] * self.pxl_per_cm_x), int((H - goal_pos[1]) * self.pxl_per_cm_y))
             cv2.circle(frame, s_pt, 8, (100, 200, 0), -1)
             cv2.circle(frame, g_pt, 8, (0, 0, 180), -1)
-
             
         # --- Draw Robot Pose ---
+        # ===================== EKF TRAJECTORIES DRAWING ===================== #
+        # Trayectoria ESTIMADA (después de update): magenta
+        if len(self.ekf_est_traj) > 1:
+            for i in range(1, len(self.ekf_est_traj)):
+                x1, y1 = self.ekf_est_traj[i - 1]
+                x2, y2 = self.ekf_est_traj[i]
+                pt1 = (int(x1 * self.pxl_per_cm_x), int((H - y1) * self.pxl_per_cm_y))
+                pt2 = (int(x2 * self.pxl_per_cm_x), int((H - y2) * self.pxl_per_cm_y))
+                cv2.line(frame, pt1, pt2, (255, 0, 255), 2)  # Magenta
+
+        # Trayectoria PREDICHA (solo modelo): azul
+        if len(self.ekf_pred_traj) > 1:
+            for i in range(1, len(self.ekf_pred_traj)):
+                x1, y1 = self.ekf_pred_traj[i - 1]
+                x2, y2 = self.ekf_pred_traj[i]
+                pt1 = (int(x1 * self.pxl_per_cm_x), int((H - y1) * self.pxl_per_cm_y))
+                pt2 = (int(x2 * self.pxl_per_cm_x), int((H - y2) * self.pxl_per_cm_y))
+                cv2.line(frame, pt1, pt2, (255, 0, 0), 1)  # Blue (thinner)
+
+        # ===================== UNCERTAINTY ELLIPSE ===================== #
+        # Dibujar elipse de incertidumbre alrededor de la pose ESTIMADA actual
+        if (ekf_est_pose is not None) and (ekf_cov is not None):
+            try:
+                # Tomar la submatriz 2x2 de posición (x, y)
+                Sigma_xy = np.array([[ekf_cov[0, 0], ekf_cov[0, 1]],
+                                     [ekf_cov[1, 0], ekf_cov[1, 1]]], dtype=float)
+
+                # Transformar a pixeles: J * Sigma * J^T
+                J = np.diag([self.pxl_per_cm_x, self.pxl_per_cm_y])
+                Sigma_pix = J @ Sigma_xy @ J.T
+
+                # Autovalores y autovectores
+                eigvals, eigvecs = np.linalg.eigh(Sigma_pix)
+                eigvals = np.maximum(eigvals, 1e-9)  # evitar cosas negativas numéricas
+
+                # 2-sigma ellipse (~95% conf)
+                k = 2.0
+                axis_len1 = k * math.sqrt(eigvals[1])
+                axis_len2 = k * math.sqrt(eigvals[0])
+
+                # Ángulo de la elipse en grados (desde el vector propio mayor)
+                angle = math.degrees(math.atan2(eigvecs[1, 1], eigvecs[0, 1]))
+
+                # Centro en pixeles (pose estimada)
+                cx = int(ekf_est_pose.x * self.pxl_per_cm_x)
+                cy = int((H - ekf_est_pose.y) * self.pxl_per_cm_y)
+
+                cv2.ellipse(
+                    frame,
+                    (cx, cy),
+                    (int(axis_len1), int(axis_len2)),
+                    angle,
+                    0,
+                    360,
+                    (0, 255, 0), 2,  # Verde
+                )
+            except Exception as e:
+                # Si algo sale mal en la elipse, no queremos crashear la visu
+                print(f"Error drawing EKF covariance ellipse: {e}")
+
+        # ===================== ROBOT POSE (VISION) ===================== #
         if robot_pose:
             pose_colour = (70, 0, 160)
             rx, ry, rtheta = robot_pose
@@ -551,6 +640,9 @@ class VisionSystem:
             state_text = controller_state.name
         else:
             state_text = mission_state.name
+
+        # ===================== NAV MODE TEXT ===================== #
+        text_nav_mode = f"Value: {nav_mode}"
 
         cv2.putText(
             frame,  # Image
