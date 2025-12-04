@@ -22,11 +22,11 @@ class Thymio:
         ''' Probably will need some changes to address a better argumentation (if they work)'''
         # Input Wheel Speed Covariances thymio unit wise
         self.var_vl_base = 1.59             # variance in v_l 
-        self.var_vr_base = 1.13             # variance in v_r 
+        self.var_vr_base = 1.24             # variance in v_r 
 
         # Obtained through experimentation and data analysis of variances in thymio unit wise
-        self.kvl = 0.47
-        self.kvr = 0.51 
+        self.kvl = 0.289 #0.47
+        self.kvr = 0.338 #0.51 
         ''''''
 
 
