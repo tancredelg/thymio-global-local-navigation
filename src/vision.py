@@ -429,15 +429,14 @@ class VisionSystem:
         ekf_est_pose: Optional[Pose] = None,
         ekf_pred_pose: Optional[Pose] = None,
         ekf_cov: Optional[np.ndarray] = None,
-
-        
     ) -> bool:
         """
         Update robot marker on live visualization.
-        :param robot_pose: Current robot Pose
-        :param target: Current target point (optional, for heading visualization)
-        :return: True if 'q' was pressed to quit, False otherwise
 
+        :param mission_state: High-level mission state (e.g., RUNNING / FINISHED)
+        :param controller_state: Low-level controller state (RobotState)
+        :param robot_pose: Current robot Pose from vision (can be None)
+        :param target: Current target point (optional, for heading visualization)
         :param ekf_est_pose: Pose ESTIMADA por EKF (después del update)
         :param ekf_pred_pose: Pose PREDICHA por EKF (antes del update)
         :param ekf_cov: Matriz de covarianza 3x3 del EKF (para elipse)
@@ -458,7 +457,6 @@ class VisionSystem:
 
         # Usar última imagen warpeada, si existe; si no, el background estático
         if hasattr(self, "latest_warped_img"):
-            # Convert RGB to BGR for OpenCV display
             frame = cv2.cvtColor(self.latest_warped_img, cv2.COLOR_RGB2BGR)
         else:
             frame = cv2.cvtColor(self.bg_img, cv2.COLOR_RGB2BGR)
@@ -466,11 +464,9 @@ class VisionSystem:
         H = self.map_height
 
         # ===================== EKF TRAJECTORY BUFFERS ===================== #
-        # Acumular trayectoria ESTIMADA
         if ekf_est_pose is not None:
             self.ekf_est_traj.append((float(ekf_est_pose.x), float(ekf_est_pose.y)))
 
-        # Acumular trayectoria PREDICHA
         if ekf_pred_pose is not None:
             self.ekf_pred_traj.append((float(ekf_pred_pose.x), float(ekf_pred_pose.y)))
 
@@ -483,6 +479,7 @@ class VisionSystem:
                 pt1 = (int(p1[0] * self.pxl_per_cm_x), int((H - p1[1]) * self.pxl_per_cm_y))
                 pt2 = (int(p2[0] * self.pxl_per_cm_x), int((H - p2[1]) * self.pxl_per_cm_y))
                 cv2.line(frame, pt1, pt2, (255, 75, 0), 1)  # Light Red
+
             # Draw nodes (dots)
             for n in self.visu_g.nodes():
                 px, py = self.visu_g.nodes[n]["pos"]
@@ -497,8 +494,6 @@ class VisionSystem:
                     pt1 = (int(p1[0] * self.pxl_per_cm_x), int((H - p1[1]) * self.pxl_per_cm_y))
                     pt2 = (int(p2[0] * self.pxl_per_cm_x), int((H - p2[1]) * self.pxl_per_cm_y))
                     cv2.line(frame, pt1, pt2, (100, 200, 0), 2)  # Cyan
-                    
-
 
             # Draw Start/Goal
             start_pos = self.visu_g.nodes[self.visu_start]["pos"]
@@ -508,7 +503,6 @@ class VisionSystem:
             cv2.circle(frame, s_pt, 8, (100, 200, 0), -1)
             cv2.circle(frame, g_pt, 8, (0, 0, 180), -1)
             
-        # --- Draw Robot Pose ---
         # ===================== EKF TRAJECTORIES DRAWING ===================== #
         # Trayectoria ESTIMADA (después de update): magenta
         if len(self.ekf_est_traj) > 1:
@@ -529,30 +523,23 @@ class VisionSystem:
                 cv2.line(frame, pt1, pt2, (255, 0, 0), 1)  # Blue (thinner)
 
         # ===================== UNCERTAINTY ELLIPSE ===================== #
-        # Dibujar elipse de incertidumbre alrededor de la pose ESTIMADA actual
         if (ekf_est_pose is not None) and (ekf_cov is not None):
             try:
-                # Tomar la submatriz 2x2 de posición (x, y)
                 Sigma_xy = np.array([[ekf_cov[0, 0], ekf_cov[0, 1]],
                                      [ekf_cov[1, 0], ekf_cov[1, 1]]], dtype=float)
 
-                # Transformar a pixeles: J * Sigma * J^T
                 J = np.diag([self.pxl_per_cm_x, self.pxl_per_cm_y])
                 Sigma_pix = J @ Sigma_xy @ J.T
 
-                # Autovalores y autovectores
                 eigvals, eigvecs = np.linalg.eigh(Sigma_pix)
-                eigvals = np.maximum(eigvals, 1e-9)  # evitar cosas negativas numéricas
+                eigvals = np.maximum(eigvals, 1e-9)
 
-                # 2-sigma ellipse (~95% conf)
-                k = 2.0
+                k = 2.0  # 2-sigma
                 axis_len1 = k * math.sqrt(eigvals[1])
                 axis_len2 = k * math.sqrt(eigvals[0])
 
-                # Ángulo de la elipse en grados (desde el vector propio mayor)
                 angle = math.degrees(math.atan2(eigvecs[1, 1], eigvecs[0, 1]))
 
-                # Centro en pixeles (pose estimada)
                 cx = int(ekf_est_pose.x * self.pxl_per_cm_x)
                 cy = int((H - ekf_est_pose.y) * self.pxl_per_cm_y)
 
@@ -566,26 +553,21 @@ class VisionSystem:
                     (0, 255, 0), 2,  # Verde
                 )
             except Exception as e:
-                # Si algo sale mal en la elipse, no queremos crashear la visu
                 print(f"Error drawing EKF covariance ellipse: {e}")
 
         # ===================== ROBOT POSE (VISION) ===================== #
         if robot_pose:
             pose_colour = (70, 0, 160)
             rx, ry, rtheta = robot_pose
-            # Robot Center
             cx = int(rx * self.pxl_per_cm_x)
             cy = int((H - ry) * self.pxl_per_cm_y)
 
-            # Direction Vector (Length 30px)
-            # World: x=cos, y=sin. Image: x=cos, y=-sin (because y is flipped)
             dx = int(30 * math.cos(rtheta))
             dy = int(30 * -math.sin(rtheta))
 
             cv2.arrowedLine(frame, (cx, cy), (cx + dx, cy + dy), pose_colour, 2, tipLength=0.6)
             cv2.circle(frame, (cx, cy), 5, pose_colour, -1)
 
-            # Text Label
             pos_text = f"x={rx:.1f} y={ry:.1f}"
             cv2.putText(
                 frame,
@@ -609,16 +591,14 @@ class VisionSystem:
                 cv2.LINE_AA,
             )
 
-            # --- Draw Controller Info (Target & Heading Error) ---
             if target:
                 tx, ty = target
                 tx_px = int(tx * self.pxl_per_cm_x)
                 ty_px = int((H - ty) * self.pxl_per_cm_y)
 
-                # Line to target
                 cv2.line(frame, (cx, cy), (tx_px, ty_px), (0, 255, 255), 1)  # Yellow
                 cv2.circle(frame, (tx_px, ty_px), 4, (0, 255, 255), -1)
-                # Calculate heading error for display
+
                 angle_to_target = math.atan2(ty - ry, tx - rx)
                 heading_error = (angle_to_target - rtheta + math.pi) % (2 * math.pi) - math.pi
 
@@ -635,33 +615,32 @@ class VisionSystem:
                 )
 
         # --- Draw Mission/Controller State (merged) ---
-        state_text = "(state undefined)"
-        if mission_state == MissionState.RUNNING:
+        if mission_state == MissionState.RUNNING and controller_state is not None:
             state_text = controller_state.name
         else:
-            state_text = mission_state.name
-
-        # ===================== NAV MODE TEXT ===================== #
-        text_nav_mode = f"Value: {nav_mode}"
+            state_text = mission_state.name if mission_state is not None else "(state undefined)"
 
         cv2.putText(
-            frame,  # Image
-            state_text,  # Text
-            (20, 40),  # Position (x, y)
-            cv2.FONT_HERSHEY_SIMPLEX,  # Font
-            1.0,  # Font scale
-            (0, 100, 255),  # Color (B, G, R)
-            2,  # Thickness
-            cv2.LINE_AA,  # Line type
+            frame,
+            state_text,
+            (20, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.0,
+            (0, 100, 255),
+            2,
+            cv2.LINE_AA,
         )
 
         cv2.imshow(self.visu_window_name, frame)
-        cv2.imwrite("../vision_debug/visu.jpg", frame)
+        # OJO: esto puede laggear si se deja siempre activo
+        # cv2.imwrite("../vision_debug/visu.jpg", frame)
+
         key = cv2.waitKey(1) & 0xFF
         if key == ord("q"):
             cv2.destroyAllWindows()
             return True
         return False
+
 
     def _merge_close_vertices(self, pts: np.ndarray, min_dist: float = 5.0) -> np.ndarray:
         """
