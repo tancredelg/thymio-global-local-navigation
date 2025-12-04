@@ -21,7 +21,7 @@ INITIAL_COVARIANCE = np.eye(3) * 1e-1
 CAMERA_COVARIANCE = np.diag([0.0011857353432198614, 0.0017873989613467563, 6.1009773737464586e-05])
 
 WAYPOINT_THRESHOLD = 3.0  # cm
-DT_NOMINAL = 0.1  # seconds (10Hz)
+DT_NOMINAL = 0.15  # seconds (10Hz)
 KIDNAP_THRESHOLD = 200  # Threshold for ground sensor delta (lower = lifted)
 RESTART_DELAY = 2.0  # Seconds to wait after being put down
 
@@ -67,6 +67,10 @@ async def run_robot(camera_index: int, warmup_time: int):
         if start_pose is None:
             raise RuntimeError("Could not locate robot for initial planning")
 
+        ekf.x = np.array([[start_pose.x],
+                  [start_pose.y],
+                  [start_pose.theta]], dtype=float)
+        
         # Augment graph with robot position
         graph, start_node_idx, goal_node_idx = vis.add_robot_to_graph(start_pose)
 
@@ -77,6 +81,10 @@ async def run_robot(camera_index: int, warmup_time: int):
 
         # Initialize visualization window
         vis.init_visu(graph, start_node_idx, goal_node_idx, waypoints, resolution=(1000, 600))
+
+        vis.ekf_est_traj.append((float(start_pose.x), float(start_pose.y)))
+
+
 
     except Exception as e:
         print(f"[Main] Mapping failed: {e}")
@@ -198,6 +206,9 @@ async def run_robot(camera_index: int, warmup_time: int):
                                 graph, start_node_idx, goal_node_idx, waypoints, resolution=(1300, 910)
                             )
 
+                            vis.ekf_est_traj.append((float(start_pose.x), float(start_pose.y)))
+
+
                             print(f"[Mission] New path found with {len(waypoints)} waypoints.")
                             mission_state = MissionState.RUNNING
                         else:
@@ -267,10 +278,10 @@ async def run_robot(camera_index: int, warmup_time: int):
             if vis.update_robot_visu(
                 mission_state,
                 controller.state,
-                vision_pose_measurement,
+                estimated_pose,
                 target,
                 ekf_pred_pose=ekf_pred_pose,
-                # ekf_cov=ekf.P if estimated_pose is not None else None,
+                ekf_cov=ekf.P if estimated_pose is not None else None,
                 ):
                 print("[Main] User requested exit.")
                 break

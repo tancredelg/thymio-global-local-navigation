@@ -420,6 +420,8 @@ class VisionSystem:
         # Create a fallback background image
         self.bg_img = self.warp_image(self.img).copy()
 
+        self.reset_trajectories()
+
     def update_robot_visu(
         self,
         mission_state: MissionState,
@@ -427,7 +429,7 @@ class VisionSystem:
         robot_pose: Optional[Pose],
         target: Optional[Point] = None,
         ekf_pred_pose: Optional[Pose] = None,
-        #ekf_cov: Optional[np.ndarray] = None,
+        ekf_cov: Optional[np.ndarray] = None,
     ) -> bool:
         """
         Update robot marker on live visualization.
@@ -495,6 +497,85 @@ class VisionSystem:
             g_pt = (int(goal_pos[0] * self.pxl_per_cm_x), int((H - goal_pos[1]) * self.pxl_per_cm_y))
             cv2.circle(frame, s_pt, 8, (100, 200, 0), -1)
             cv2.circle(frame, g_pt, 8, (0, 0, 180), -1)
+        
+
+        # Punto amarillo en la pose PREDICHA actual
+        if ekf_pred_pose is not None:
+            px = int(ekf_pred_pose.x * self.pxl_per_cm_x)
+            py = int((H - ekf_pred_pose.y) * self.pxl_per_cm_y)
+            cv2.circle(frame, (px, py), 4, (0, 255, 255), -1)  # Yellow
+
+        # ===================== ELIPSE DE INCERTIDUMBRE ===================== #
+        # Dibujar antes del robot para que el robot quede "encima"
+        if (
+            mission_state == MissionState.RUNNING
+            and robot_pose is not None
+            and ekf_cov is not None
+        ):
+            try:
+                # Tomar solo la covarianza de posición (x, y)
+                Sigma_xy = np.array(
+                    [
+                        [ekf_cov[0, 0], ekf_cov[0, 1]],
+                        [ekf_cov[1, 0], ekf_cov[1, 1]],
+                    ],
+                    dtype=float,
+                )
+
+                # Transformar a espacio de pixeles: J * Sigma * J^T
+                sx = float(self.pxl_per_cm_x)
+                sy = float(self.pxl_per_cm_y)
+                J = np.array([[sx, 0.0], [0.0, sy]], dtype=float)
+                Sigma_px = J @ Sigma_xy @ J.T
+
+                # Asegurar simetría numérica
+                Sigma_px = 0.5 * (Sigma_px + Sigma_px.T)
+
+                # Autovalores y autovectores (para matrices simétricas)
+                vals, vecs = np.linalg.eigh(Sigma_px)
+
+                # Clamp para evitar negativos numéricos
+                vals = np.maximum(vals, 0.0)
+
+                # Factor k-sigma (ej. 2-sigma)
+                k = 2.0
+                # Autovalor mayor = dirección de mayor incertidumbre
+                idx_max = 1 if vals[1] >= vals[0] else 0
+                idx_min = 1 - idx_max
+
+                major_axis = k * math.sqrt(vals[idx_max])
+                minor_axis = k * math.sqrt(vals[idx_min])
+
+                # Centro en pixeles
+                rx, ry, _ = robot_pose
+                cx = int(rx * self.pxl_per_cm_x)
+                cy = int((H - ry) * self.pxl_per_cm_y)
+
+                # Dirección del eje mayor en pixeles
+                vx = float(vecs[0, idx_max])
+                vy = float(vecs[1, idx_max])
+
+                # Ángulo en grados para OpenCV (en coords de imagen)
+                angle = math.degrees(math.atan2(vy, vx))
+
+                # OpenCV espera semi-ejes
+                axes = (int(max(major_axis, 1.0)), int(max(minor_axis, 1.0)))
+
+                # Color y grosor de la elipse (cian claro)
+                cv2.ellipse(
+                    frame,
+                    (cx, cy),
+                    axes,
+                    angle,
+                    0.0,
+                    360.0,
+                    (255, 255, 0),  # BGR
+                    1,
+                    cv2.LINE_AA,
+                )
+            except Exception:
+                # En caso de cualquier problema numérico, no queremos tronar el loop
+                pass
 
         # --- Draw Robot Pose ---
         if robot_pose:
@@ -561,11 +642,7 @@ class VisionSystem:
                     cv2.LINE_AA,
                 )
 
-        # Punto amarillo en la pose PREDICHA actual
-        if ekf_pred_pose is not None:
-            px = int(ekf_pred_pose.x * self.pxl_per_cm_x)
-            py = int((H - ekf_pred_pose.y) * self.pxl_per_cm_y)
-            cv2.circle(frame, (px, py), 4, (0, 255, 255), -1)  # Yellow
+        
 
         if len(self.ekf_est_traj) > 1:
             for i in range(1, len(self.ekf_est_traj)):
@@ -573,7 +650,7 @@ class VisionSystem:
                 x2, y2 = self.ekf_est_traj[i]
                 pt1 = (int(x1 * self.pxl_per_cm_x), int((H - y1) * self.pxl_per_cm_y))
                 pt2 = (int(x2 * self.pxl_per_cm_x), int((H - y2) * self.pxl_per_cm_y))
-                cv2.line(frame, pt1, pt2, (255, 0, 255), 2)  # Magenta
+                cv2.line(frame, pt1, pt2, (255, 0, 255), 1)  # Magenta
         
         # Trayectoria PREDICHA (solo modelo): amarillo
         if len(self.ekf_pred_traj) > 1:
@@ -771,3 +848,8 @@ class VisionSystem:
             if math.isclose(pt.x, pt2.x, abs_tol=1e-4) and math.isclose(pt.y, pt2.y, abs_tol=1e-4):
                 return i
         return None
+    
+    def reset_trajectories(self):
+        """Clear all stored trajectories for visualization."""
+        self.ekf_est_traj = []
+        self.ekf_pred_traj = []
