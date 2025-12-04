@@ -1,6 +1,6 @@
 import heapq
 import networkx as nx
-from utils import Point, HeuristicFunction, euclidean_distance
+from utils import HeuristicFunction, euclidean_distance
 
 
 def reconstruct_path(came_from: dict[int, int], current: int) -> list[int]:
@@ -49,31 +49,28 @@ def find_path(
     # 2. Track "Parent" pointers for path reconstruction
     came_from: dict[int, int] = {}
 
-    # 3. Track g_cost (Cost from start to current node)
+    # 3. Track G cost (Cost from start to current node)
     # Default to infinity for all nodes except start
     g_cost: dict[int, float] = {node: float("inf") for node in graph.nodes}
     g_cost[start_node] = 0
 
-    # 4. Track f_cost (Estimated total cost: g + h)
+    # 4. Track F cost (Estimated total cost: G + H)
     # We don't strictly need to store this for all nodes, but it helps debugging
     f_cost: dict[int, float] = {node: float("inf") for node in graph.nodes}
     f_cost[start_node] = euclidean_distance(graph.nodes[start_node]["pos"], graph.nodes[goal_node]["pos"])
 
-    # Keep track of items in the heap to allow for "Lazy Deletion"
-    # (Python's heapq doesn't support updating priorities, so we just add duplicates
-    # and ignore the old, worse ones when we pop them).
-    open_set_hash: set[int] = {start_node}
-
     while open_set:
-        # Get node with lowest f_cost
+        # Get node with lowest F cost
         current_f, current = heapq.heappop(open_set)
 
-        # If we reached the goal, we are done!
-        if current == goal_node:
+        # Skip stale entries in the priority queue (lazy delete optimization)
+        # If we found a shorter path to this node already (updated F cost), ignore this old entry.
+        if current_f > f_cost[current]:
+            continue
+
+        if current == goal_node:  # Reached the goal!
             # Return the reconstructed path (need to backtrack to start, and reverse it)
             return reconstruct_path(came_from, current)
-
-        open_set_hash.discard(current)
 
         # Explore neighbors
         # graph[current] gives a dict of neighbors: {neighbor_id: {'weight': dist}}
@@ -88,17 +85,13 @@ def find_path(
                 came_from[neighbor] = current
                 g_cost[neighbor] = tentative_g_cost
 
-                # Calculate f_cost = g_cost + heuristic
+                # Calculate F cost = G cost + H (heuristic) cost
                 h = heuristic(graph.nodes[neighbor]["pos"], graph.nodes[goal_node]["pos"])
                 f = tentative_g_cost + h
                 f_cost[neighbor] = f
 
-                # Add to priority queue if not already there
-                # (Or if it is there, we add the duplicate with better score.
-                # Ideally we check, but for small graphs, adding duplicates is fine/faster).
+                # Add to priority queue
                 heapq.heappush(open_set, (f, neighbor))
-                open_set_hash.add(neighbor)
 
     # If we get here, open_set is empty but goal was not reached
-    print("Error: No path found!")
-    return []
+    raise RuntimeError(f"No path found from node {start_node} to {goal_node}")
