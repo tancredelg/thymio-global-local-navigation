@@ -457,12 +457,12 @@ class VisionSystem:
         H = self.map_height
 
         # ===================== EKF TRAJECTORY BUFFERS ===================== #
-        # ====== TRAJECTORIA ESTIMADA (magenta) ======
-        if robot_pose is not None:
-            # añadir punto actual a la trayectoria estimada
+        if mission_state == MissionState.RUNNING and robot_pose is not None:
             self.ekf_est_traj.append((float(robot_pose.x), float(robot_pose.y)))
-        if ekf_pred_pose is not None:
+
+        if mission_state == MissionState.RUNNING and ekf_pred_pose is not None:
             self.ekf_pred_traj.append((float(ekf_pred_pose.x), float(ekf_pred_pose.y)))
+
 
         # --- Draw Map Elements (Graph, Path) ---
         if hasattr(self, "visu_g"):
