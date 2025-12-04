@@ -203,7 +203,7 @@ async def run_robot(camera_index: int, warmup_time: int):
 
                             # 5. Update Visu
                             vis.init_visu(
-                                graph, start_node_idx, goal_node_idx, waypoints, resolution=(1300, 910)
+                                graph, start_node_idx, goal_node_idx, waypoints, resolution=(1000, 600)
                             )
 
                             vis.ekf_est_traj.append((float(start_pose.x), float(start_pose.y)))

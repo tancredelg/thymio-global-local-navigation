@@ -624,13 +624,14 @@ class VisionSystem:
                 ty_px = int((H - ty) * self.pxl_per_cm_y)
 
                 # Line to target
-                cv2.line(frame, (cx, cy), (tx_px, ty_px), (0, 255, 255), 1)  # Yellow
-
+                cv2.line(frame, (cx, cy), (tx_px, ty_px), (0, 0, 0), 1)
+                cv2.circle(frame, (tx_px, ty_px), 4, (0, 0, 0), -1)
+                """
                 # Calculate heading error for display
-                angle_to_target = math.atan2(ty - ry, tx - rx)
-                heading_error = (angle_to_target - rtheta + math.pi) % (2 * math.pi) - math.pi
+                #angle_to_target = math.atan2(ty - ry, tx - rx)
+                #heading_error = (angle_to_target - rtheta + math.pi) % (2 * math.pi) - math.pi
 
-                err_text = f"Err: {math.degrees(heading_error):.1f} deg"
+                #err_text = f"Err: {math.degrees(heading_error):.1f} deg"
                 cv2.putText(
                     frame,
                     err_text,
@@ -641,7 +642,7 @@ class VisionSystem:
                     2,
                     cv2.LINE_AA,
                 )
-
+                """
         
 
         if len(self.ekf_est_traj) > 1:
@@ -650,7 +651,7 @@ class VisionSystem:
                 x2, y2 = self.ekf_est_traj[i]
                 pt1 = (int(x1 * self.pxl_per_cm_x), int((H - y1) * self.pxl_per_cm_y))
                 pt2 = (int(x2 * self.pxl_per_cm_x), int((H - y2) * self.pxl_per_cm_y))
-                cv2.line(frame, pt1, pt2, (255, 0, 255), 1)  # Magenta
+                cv2.line(frame, pt1, pt2, (pose_colour), 2) 
         
         # Trayectoria PREDICHA (solo modelo): amarillo
         if len(self.ekf_pred_traj) > 1:
