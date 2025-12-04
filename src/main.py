@@ -269,9 +269,8 @@ async def run_robot(camera_index: int, warmup_time: int):
                 controller.state,
                 vision_pose_measurement,
                 target,
-                ekf_est_pose=estimated_pose,
                 ekf_pred_pose=ekf_pred_pose,
-                ekf_cov=ekf.P if estimated_pose is not None else None,
+                # ekf_cov=ekf.P if estimated_pose is not None else None,
                 ):
                 print("[Main] User requested exit.")
                 break
