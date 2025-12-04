@@ -76,7 +76,7 @@ async def run_robot(camera_index: int, warmup_time: int):
         print(f"[Main] Path found with {len(waypoints)} waypoints.")
 
         # Initialize visualization window
-        vis.init_visu(graph, start_node_idx, goal_node_idx, waypoints, resolution=(1300, 910))
+        vis.init_visu(graph, start_node_idx, goal_node_idx, waypoints, resolution=(1000, 600))
 
     except Exception as e:
         print(f"[Main] Mapping failed: {e}")
@@ -121,9 +121,9 @@ async def run_robot(camera_index: int, warmup_time: int):
             dt_real = now - last_time
             last_time = now
 
-            estimated_pose = None
-            ekf_pred_pose = None
-            target = None
+            #estimated_pose = None
+            #ekf_pred_pose = None
+            #target = None
 
             # Clamp dt to avoid explosions if lag occurs
             if dt_real <= 0:
@@ -267,7 +267,7 @@ async def run_robot(camera_index: int, warmup_time: int):
             if vis.update_robot_visu(
                 mission_state,
                 controller.state,
-                estimated_pose,
+                vision_pose_measurement,
                 target,
                 ekf_est_pose=estimated_pose,
                 ekf_pred_pose=ekf_pred_pose,

@@ -442,9 +442,6 @@ class VisionSystem:
         :param ekf_cov: Matriz de covarianza 3x3 del EKF (para elipse)
         :return: True si se presiona 'q' para salir, False en otro caso
         """
-        import math
-        import numpy as np
-        import cv2
 
         # Inicializar buffers de trayectoria si no existen
         if not hasattr(self, "ekf_est_traj"):
@@ -452,8 +449,8 @@ class VisionSystem:
         if not hasattr(self, "ekf_pred_traj"):
             self.ekf_pred_traj = []  # lista de (x, y) en cm
 
-        if robot_pose is None:
-            robot_pose = self.get_robot_pose()
+        #if robot_pose is None:
+        #   robot_pose = self.get_robot_pose()
 
         # Usar última imagen warpeada, si existe; si no, el background estático
         if hasattr(self, "latest_warped_img"):
@@ -520,7 +517,7 @@ class VisionSystem:
                 x2, y2 = self.ekf_pred_traj[i]
                 pt1 = (int(x1 * self.pxl_per_cm_x), int((H - y1) * self.pxl_per_cm_y))
                 pt2 = (int(x2 * self.pxl_per_cm_x), int((H - y2) * self.pxl_per_cm_y))
-                cv2.line(frame, pt1, pt2, (255, 0, 0), 1)  # Blue (thinner)
+                cv2.line(frame, pt1, pt2, (0, 0, 0), 1)  # black (thinner)
 
         # ===================== UNCERTAINTY ELLIPSE ===================== #
         if (ekf_est_pose is not None) and (ekf_cov is not None):
