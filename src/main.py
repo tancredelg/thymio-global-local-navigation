@@ -3,10 +3,12 @@ import asyncio
 import time
 import numpy as np
 import argparse
-from enum import Enum
-from tdmclient import ClientAsync
+import traceback
+from typing import Tuple, Optional, List
 
-# Import your modules
+from tdmclient import ClientAsync, Node
+
+# Project Modules
 from vision import VisionSystem
 from control import ThymioController
 from pathfinding import find_path
@@ -18,23 +20,139 @@ from thymio_math_model import Thymio
 INITIAL_POSE = Pose(0, 0, 0)
 INITIAL_COVARIANCE = np.eye(3) * 1e-1
 # Camera covariance (tuned)
-CAMERA_COVARIANCE = np.diag([0.0011857353432198614, 0.0017873989613467563, 6.1009773737464586e-05])
+CAMERA_COVARIANCE = np.diag(
+    [
+        0.0011857353432198614,
+        0.0017873989613467563,
+        6.1009773737464586e-05,
+    ]
+)
 
-WAYPOINT_THRESHOLD = 3.0  # cm
-DT_NOMINAL = 0.15  # seconds (10Hz)
+WAYPOINT_THRESHOLD = 1.5  # cm
+DT_NOMINAL = 0.1  # seconds (10Hz)
 KIDNAP_THRESHOLD = 200  # Threshold for ground sensor delta (lower = lifted)
-RESTART_DELAY = 2.0  # Seconds to wait after being put down
+RESTART_DELAY = 2.5  # Seconds to wait after being put down
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+
+def perform_planning(vis: VisionSystem, ekf: EKF) -> Tuple[Optional[List[Point]], int]:
+    """
+    Locates the robot, builds the visibility graph, and plans a path to the goal.
+    Also resets the EKF state to the newly found pose.
+
+    :param vis: VisionSystem instance
+    :param ekf: EKF instance
+    :return: Tuple (list of waypoints, start_node_index) or (None, -1) if failed
+    """
+    print("[Planning] Locating Robot...")
+    start_pose = None
+
+    # Retry a few times if needed
+    for _ in range(3):
+        start_pose = vis.get_robot_pose()
+        if start_pose:
+            break
+        time.sleep(0.5)
+
+    if start_pose is None:
+        print("[Planning] Could not locate robot.")
+        return None, -1
+
+    # Augment graph with robot position
+    graph, start_node_idx, goal_node_idx = vis.add_robot_to_graph(start_pose)
+
+    # Find path using A*
+    waypoints_idx = find_path(graph, start_node_idx, goal_node_idx)
+    waypoints = [graph.nodes[i]["pos"] for i in waypoints_idx]
+
+    print(f"[Planning] Path found with {len(waypoints)} waypoints.")
+
+    # Reset EKF to visual pose
+    ekf.x = np.array([[start_pose.x], [start_pose.y], [start_pose.theta]], dtype=float)
+    ekf.P = INITIAL_COVARIANCE.copy()
+
+    # Initialize visualization
+    vis.init_visu(graph, start_node_idx, goal_node_idx, waypoints)
+    vis.ekf_est_traj.append((float(start_pose.x), float(start_pose.y)))
+
+    return waypoints, start_node_idx
+
+
+async def initialize_thymio() -> Tuple[ClientAsync, Node]:
+    """Connects to the Thymio and locks the node."""
+    print("[Main] Connecting to Thymio via ClientAsync...")
+    client = ClientAsync()
+    node = await client.wait_for_node()
+    await node.lock()
+    print("[Main] Thymio Connected and Locked.")
+
+    await node.wait_for_variables(
+        [
+            "prox.horizontal",
+            "prox.ground.delta",
+            "motor.left.target",
+            "motor.right.target",
+            "motor.left.speed",
+            "motor.right.speed",
+        ]
+    )
+    return client, node
+
+
+async def cleanup(
+    client: ClientAsync, node: Node, vis: VisionSystem, mission_state: MissionState, controller_state
+):
+    """Stops motors, unlocks robot, and handles final visualization cleanup."""
+    print("[Main] Cleanup initiated...")
+
+    # Stop Motors
+    try:
+        await node.set_variables({"motor.left.target": [0], "motor.right.target": [0]})
+        node.flush()
+    except Exception:
+        pass
+
+    # Unlock Robot
+    try:
+        await node.unlock()
+        print("[Main] Robot unlocked.")
+    except Exception:
+        pass
+
+    # Close Client
+    try:
+        await client.close()
+        print("[Main] Client disconnected.")
+    except Exception:
+        pass
+
+    # Wait for user to close visualization
+    print("[Main] Press 'q' in the visualization window to exit.")
+    while True:
+        # We use get_robot_pose() just to keep the camera feed alive if needed
+        if vis.update_robot_visu(mission_state, controller_state, vis.get_robot_pose()):
+            break
+
+    vis.release()
+    print("[Main] Cleanup complete. Exiting.")
+
+
+# =============================================================================
+# Main Loop
+# =============================================================================
 
 
 async def run_robot(camera_index: int, warmup_time: int):
     """
     Main asynchronous control loop.
     """
-
-    # 1. Initialize Systems
+    # --- 1. Initialize Systems ---
     print(f"[Main] Initializing Vision System on camera {camera_index}...")
     vis = VisionSystem(camera_index=camera_index, warmup_time=warmup_time)
-
     controller = ThymioController()
 
     thymio_model = Thymio()
@@ -48,68 +166,24 @@ async def run_robot(camera_index: int, warmup_time: int):
         CAMERA_COVARIANCE,
     )
 
-    # 2. Map Construction & Planning
+    # --- 2. Map Construction & Initial Planning ---
     print("[Main] Constructing Map...")
     try:
-        # Note: cspace_padding ensures robot doesn't clip corners
         vis.build_static_map(cspace_padding=3.0)
+        waypoints, _ = perform_planning(vis, ekf)
 
-        # Get initial robot pose for planning
-        print("[Main] Locating Robot...")
-        # Retry a few times if needed
-        start_pose = None
-        for _ in range(3):
-            start_pose = vis.get_robot_pose()
-            if start_pose:
-                break
-            time.sleep(0.5)
-
-        if start_pose is None:
-            raise RuntimeError("Could not locate robot for initial planning")
-
-        ekf.x = np.array([[start_pose.x],
-                  [start_pose.y],
-                  [start_pose.theta]], dtype=float)
-        
-        # Augment graph with robot position
-        graph, start_node_idx, goal_node_idx = vis.add_robot_to_graph(start_pose)
-
-        waypoints_idx = find_path(graph, start_node_idx, goal_node_idx)
-        waypoints = [graph.nodes[i]["pos"] for i in waypoints_idx]
-
-        print(f"[Main] Path found with {len(waypoints)} waypoints.")
-
-        # Initialize visualization window
-        vis.init_visu(graph, start_node_idx, goal_node_idx, waypoints, resolution=(1000, 600))
-
-        vis.ekf_est_traj.append((float(start_pose.x), float(start_pose.y)))
-
-
+        if waypoints is None:
+            raise RuntimeError("Initial planning failed.")
 
     except Exception as e:
-        print(f"[Main] Mapping failed: {e}")
+        print(f"[Main] Mapping/Planning failed: {e}")
         vis.release()
         return
 
-    # 3. Connect to Thymio
-    print("[Main] Connecting to Thymio via ClientAsync...")
-    client = ClientAsync()
-    node = await client.wait_for_node()
-    await node.lock()
-    print("[Main] Thymio Connected and Locked.")
+    # --- 3. Connect to Thymio ---
+    client, node = await initialize_thymio()
 
-    # Subscribe to variables we need
-    await node.wait_for_variables(
-        [
-            "prox.horizontal",
-            "prox.ground.delta",
-            "motor.left.target",
-            "motor.right.target",
-            "motor.left.speed",
-            "motor.right.speed",
-        ]
-    )
-
+    # --- 4. Control Loop State ---
     current_waypoint_idx = 0
     l_cmd, r_cmd = 0, 0
     thymio_model.v_l, thymio_model.v_r = 0, 0
@@ -129,15 +203,10 @@ async def run_robot(camera_index: int, warmup_time: int):
             dt_real = now - last_time
             last_time = now
 
-            #estimated_pose = None
-            #ekf_pred_pose = None
-            #target = None
-
             # Clamp dt to avoid explosions if lag occurs
-            if dt_real <= 0:
+            dt_real = max(0.0, min(dt_real, 0.5))
+            if dt_real == 0:
                 dt_real = DT_NOMINAL
-            if dt_real > 0.5:
-                dt_real = 0.5
 
             # Update model physics
             thymio_model.dt = dt_real
@@ -146,17 +215,16 @@ async def run_robot(camera_index: int, warmup_time: int):
             # --- B. Sensing ---
             # 1. Vision
             vision_pose_measurement = vis.get_robot_pose()
-            estimated_pose = None  # Default if not RUNNING
+            estimated_pose = None
+            ekf_pred_pose = None
 
             # 2. Odometry (Motor speeds)
             try:
-                # Note: node.v accesses cached values updated in background
                 left_speed_meas = node.v.motor.left.speed
                 right_speed_meas = node.v.motor.right.speed
             except Exception:
                 left_speed_meas, right_speed_meas = 0, 0
 
-            # Convert raw units to cm/s
             thymio_model.v_l = thymio_model.thymio_unit_to_speed(left_speed_meas)
             thymio_model.v_r = thymio_model.thymio_unit_to_speed(right_speed_meas)
 
@@ -164,8 +232,7 @@ async def run_robot(camera_index: int, warmup_time: int):
             prox_sensors = list(node.v.prox.horizontal)
             ground_sensors = list(node.v.prox.ground.delta)
 
-            # --- Mission State Logic ---
-            # Check if robot is lifted (low delta values indicate no reflection/void)
+            # --- C. Mission State Logic (Kidnapping) ---
             is_lifted = max(ground_sensors) < KIDNAP_THRESHOLD
 
             if mission_state == MissionState.RUNNING:
@@ -186,66 +253,44 @@ async def run_robot(camera_index: int, warmup_time: int):
                 elif (now - restart_start_time) > RESTART_DELAY:
                     print("[Mission] Stabilized. Re-planning...")
                     try:
-                        # 1. Locate Robot
-                        start_pose = vis.get_robot_pose()
-                        if start_pose:
-                            # 2. Re-build Graph
-                            graph, start_node_idx, goal_node_idx = vis.add_robot_to_graph(start_pose)
-
-                            # 3. Find Path
-                            waypoints_idx = find_path(graph, start_node_idx, goal_node_idx)
-                            waypoints = [graph.nodes[i]["pos"] for i in waypoints_idx]
-
-                            # 4. Reset State
+                        new_waypoints, _ = perform_planning(vis, ekf)
+                        if new_waypoints:
+                            waypoints = new_waypoints
                             current_waypoint_idx = 0
-                            ekf.x = np.array([[start_pose.x], [start_pose.y], [start_pose.theta]])
-                            ekf.P = INITIAL_COVARIANCE.copy()
-
-                            # 5. Update Visu
-                            vis.init_visu(
-                                graph, start_node_idx, goal_node_idx, waypoints, resolution=(1000, 600)
-                            )
-
-                            vis.ekf_est_traj.append((float(start_pose.x), float(start_pose.y)))
-
-
-                            print(f"[Mission] New path found with {len(waypoints)} waypoints.")
                             mission_state = MissionState.RUNNING
+                            print(f"[Mission] Resumed with {len(waypoints)} waypoints.")
                         else:
                             print("[Mission] Could not locate robot. Retrying...")
                     except Exception as e:
                         print(f"[Mission] Re-planning failed: {e}")
 
-            # --- C. State Estimation & Control (Only if RUNNING) ---
+            # --- D. State Estimation & Control (Only if RUNNING) ---
+            target = None
+
             if mission_state == MissionState.RUNNING:
-                # Predict
+                # 1. Predict
                 ekf.predict_step()
                 pred_vec = ekf.x.flatten()
-                ekf_pred_pose = Pose(pred_vec[0],pred_vec[1] ,pred_vec[2])
+                ekf_pred_pose = Pose(pred_vec[0], pred_vec[1], pred_vec[2])
 
-                # Update (if camera saw tag)
+                # 2. Update (if camera saw tag)
                 if vision_pose_measurement is not None:
                     z = np.array(
                         [
                             vision_pose_measurement.x,
                             vision_pose_measurement.y,
                             vision_pose_measurement.theta,
-                        ],
-                        dtype=float,
+                        ]
                     )
                     ekf.update_step(z)
 
-                # Get final estimate
+                # 3. Get final estimate
                 est_vec = ekf.x.flatten()
                 estimated_pose = Pose(est_vec[0], est_vec[1], est_vec[2])
 
-                # Debug info (every few frames or always)
-                # print(f"Pose: ({estimated_pose.x:.1f}, {estimated_pose.y:.1f}) | Waypoint: {current_waypoint_idx}")
-
-                # --- D. Path & Control Logic ---
+                # 4. Path Following
                 if current_waypoint_idx < len(waypoints):
                     target = waypoints[current_waypoint_idx]
-
                     dist = euclidean_distance(Point(estimated_pose.x, estimated_pose.y), target)
 
                     if dist < WAYPOINT_THRESHOLD:
@@ -255,10 +300,7 @@ async def run_robot(camera_index: int, warmup_time: int):
                     if current_waypoint_idx >= len(waypoints):
                         print("[Nav] GOAL REACHED! Stopping.")
                         l_cmd, r_cmd = 0, 0
-                        # Optional: Break or stay in RUNNING but stopped
-                        # break
                     else:
-                        # Update target to next waypoint
                         target = waypoints[current_waypoint_idx]
                         l_cmd, r_cmd = controller.update(estimated_pose, target, prox_sensors)
             else:
@@ -282,7 +324,7 @@ async def run_robot(camera_index: int, warmup_time: int):
                 target,
                 ekf_pred_pose=ekf_pred_pose,
                 ekf_cov=ekf.P if estimated_pose is not None else None,
-                ):
+            ):
                 print("[Main] User requested exit.")
                 break
 
@@ -295,35 +337,9 @@ async def run_robot(camera_index: int, warmup_time: int):
         print("[Main] Loop cancelled.")
     except Exception as e:
         print(f"[Main] Unexpected error: {e}")
-        import traceback
-
         traceback.print_exc()
     finally:
-        print("[Main] Cleanup initiated...")
-
-        # Stop Motors
-        try:
-            await node.set_variables({"motor.left.target": [0], "motor.right.target": [0]})
-            node.flush()
-        except:
-            pass
-
-        # Unlock Robot
-        try:
-            await node.unlock()
-            print("[Main] Robot unlocked.")
-        except:
-            pass
-
-        # Waiting exit visu with "q"
-        while True:
-            if vis.update_robot_visu(mission_state, controller.state, vis.get_robot_pose()):
-                print("[Main] User requested exit.")
-                break
-
-        del vis
-        print("[Main] Cleanup complete. Exiting.")
-    return
+        await cleanup(client, node, vis, mission_state, controller.state)
 
 
 if __name__ == "__main__":
