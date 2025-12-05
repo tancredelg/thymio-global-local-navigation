@@ -1,5 +1,4 @@
-# Image directories
-images/
+# Debug image directories
 vision_debug/
 
 # Compiled Python files (anywhere)
